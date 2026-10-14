@@ -1,8 +1,6 @@
 import { StyleSheet, Text, View } from "react-native";
 import { AppShell } from "../shared/AppShell";
 
-import { AppShell } from "../shared/AppShell";
-
 export function PickupPlan() {
   return (
     <AppShell title="Pickup Plan" badge="Plan" activeTab="plan">
