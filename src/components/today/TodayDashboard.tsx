@@ -1,5 +1,5 @@
 import { Link } from "expo-router";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { AppShell } from "../shared/AppShell";
@@ -13,25 +13,51 @@ import { mockData } from "../shared/mockData";
 import type { ThemeTokens } from "../shared/theme";
 
 export function TodayDashboard() {
-  const { theme, selectedCaregiver } = useAppContext();
+  const { theme, selectedCaregiver, temporaryDismissal, trustedHelpers, backupRequest, requestBackupPickup } = useAppContext();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const [backupRequested, setBackupRequested] = useState(false);
-  const { child, school, familyMembers, trustedHelpers, pickupStatus, schedule, backupRequest } = mockData;
-  const collector = [...familyMembers, ...trustedHelpers].find((person) => person.id === pickupStatus.collectorId);
+  const { child, school, familyMembers, pickupStatus, schedule } = mockData;
+  const scheduledCollector = [...familyMembers, ...trustedHelpers].find((person) => person.id === pickupStatus.collectorId);
   const caregiver = selectedCaregiver?.name ?? "Abu";
   const weekday = new Date().getDay();
-  const dismissal = schedule.weekdayTimes[(weekday === 0 ? 1 : weekday) as 1 | 2 | 3 | 4 | 5] ?? "1:00 PM";
+  const weekdayKey = (weekday === 0 ? 1 : Math.min(weekday, 5)) as 1 | 2 | 3 | 4 | 5;
+  const originalDismissal = schedule.weekdayTimes[weekdayKey] ?? "1:00 PM";
+  const dismissal = temporaryDismissal?.weekday === weekdayKey ? temporaryDismissal.time : originalDismissal;
+  const changedToday = temporaryDismissal?.weekday === weekdayKey;
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning," : hour < 17 ? "Good afternoon," : "Good evening,";
+  const backupHelper = trustedHelpers.find((helper) => helper.id === backupRequest.helperId);
+  const collector = backupRequest.state === "accepted" ? backupHelper ?? scheduledCollector : scheduledCollector;
   const status = pickupStatus.state;
-  const isLate = status === "late";
+  const isLate = status === "late" && backupRequest.state !== "accepted";
   const atSchool = pickupStatus.currentPlace === "school";
-  const isCovered = status === "covered" || status === "arrived";
-  const statusLabel = isLate ? "Pickup may be late" : isCovered ? "Pickup covered" : atSchool ? "Waiting at school" : "On track";
-  const tone = isLate ? "warning" : isCovered ? "success" : "info";
-  const journeyText = atSchool
-    ? `${child.name} is waiting at school for ${collector?.name ?? "the collector"}.`
+  const onRoad = pickupStatus.currentPlace === "road";
+  const isCovered = status === "covered" || backupRequest.state === "accepted";
+  const isArrived = status === "arrived";
+  const statusLabel = isLate ? "Pickup may be late" : isArrived ? "Pickup journey complete" : isCovered ? "Backup pickup covered" : atSchool ? "Waiting at school" : onRoad ? "On the way" : status === "planned" ? "Pickup planned" : "On track";
+  const tone = isLate ? "warning" : isCovered || isArrived ? "success" : "info";
+  const journeyText = isArrived
+    ? `The pickup journey with ${collector?.name ?? "the collector"} is marked complete in this demo.`
     : isCovered
-      ? `${collector?.name ?? "A trusted helper"} is handling pickup.`
-      : `${collector?.name ?? "Your collector"} is preparing to leave. Estimated arrival in ${pickupStatus.etaMinutes} min.`;
+      ? `${collector?.name ?? "A trusted helper"} accepted the backup pickup request.`
+      : atSchool
+        ? `${child.name} is waiting at school for ${collector?.name ?? "the collector"}.`
+        : onRoad
+          ? `${collector?.name ?? "The collector"} is on the way. Estimated arrival in ${pickupStatus.etaMinutes} min.`
+          : isLate
+            ? `The collector may arrive after dismissal. Estimated arrival in ${pickupStatus.etaMinutes} min.`
+            : `The collector is preparing to leave. Estimated arrival in ${pickupStatus.etaMinutes} min.`;
+  const canRequestBackup = backupRequest.state === "idle" || backupRequest.state === "declined";
+  const requestBackup = () => {
+    const helper = trustedHelpers.find((candidate) => candidate.state === "active");
+    requestBackupPickup(helper?.id);
+  };
+  const backupMessage = backupRequest.state === "requested"
+    ? `Waiting for a simulated response${backupHelper ? ` from ${backupHelper.name}` : ""}.`
+    : backupRequest.state === "accepted"
+      ? `${backupHelper?.name ?? "A trusted helper"} accepted in this demo.`
+      : backupRequest.state === "declined"
+        ? `${backupHelper?.name ?? "The helper"} declined in this demo. You can request another helper from Plan.`
+        : `No family member was notified.`;
 
   return (
     <AppShell title="SafeNest" badge="Today" activeTab="home">
@@ -55,7 +81,7 @@ export function TodayDashboard() {
 
       <View style={styles.greetingRow}>
         <View style={styles.greetingCopy}>
-          <Text style={styles.hello}>Good afternoon,</Text>
+          <Text style={styles.hello}>{greeting}</Text>
           <Text style={styles.greetingName}>{caregiver}</Text>
         </View>
         <View style={styles.childChip}><Avatar name={child.name} size={36} /><View><Text style={styles.childChipName}>{child.name}</Text><Text style={styles.childChipMeta}>School ends {dismissal}</Text></View></View>
@@ -67,10 +93,16 @@ export function TodayDashboard() {
           <Text style={styles.alertBody}>{schedule.changedToday.reason} · Updated by {schedule.changedToday.changedBy}</Text>
         </Card>
       ) : null}
-      {backupRequested || backupRequest.state !== "idle" ? (
+      {changedToday ? (
         <Card variant="warning" style={styles.alertCard}>
-          <Text style={styles.alertTitle}>Backup pickup request {backupRequested ? "sent" : backupRequest.state}</Text>
-          <Text style={styles.alertBody}>This is a local demo. No family member was notified.</Text>
+          <Text style={styles.alertTitle}>Dismissal temporarily changed to {dismissal}</Text>
+          <Text style={styles.alertBody}>This one-day demo change can be reset from the Pickup Plan.</Text>
+        </Card>
+      ) : null}
+      {backupRequest.state !== "idle" ? (
+        <Card variant="warning" style={styles.alertCard}>
+          <Text style={styles.alertTitle}>Backup pickup · {backupRequest.state}</Text>
+          <Text style={styles.alertBody}>{backupMessage}</Text>
         </Card>
       ) : null}
 
@@ -82,19 +114,19 @@ export function TodayDashboard() {
         <Text style={[styles.address, !isLate && styles.heroMuted]}>{school.address}</Text>
 
         <View style={[styles.journeyBox, !isLate && styles.journeyBoxDark]}>
-          <View style={styles.journeyIcon}><Text style={styles.journeyIconText}>{atSchool ? "⌂" : "↗"}</Text></View>
-          <View style={styles.journeyCopy}><Text style={[styles.journeyTitle, !isLate && styles.heroText]}>{atSchool ? "At school" : isCovered ? "Trusted pickup arranged" : "Journey status"}</Text><Text style={[styles.journeyBody, !isLate && styles.heroMuted]}>{journeyText}</Text></View>
+          <View style={styles.journeyIcon}><Text style={styles.journeyIconText}>{atSchool ? "⌂" : onRoad ? "↗" : "●"}</Text></View>
+          <View style={styles.journeyCopy}><Text style={[styles.journeyTitle, !isLate && styles.heroText]}>{isArrived ? "Journey complete" : isCovered ? "Backup arranged" : atSchool ? "At school" : onRoad ? "On the way" : isLate ? "Pickup delayed" : "Pickup plan"}</Text><Text style={[styles.journeyBody, !isLate && styles.heroMuted]}>{journeyText}</Text></View>
         </View>
 
         <View style={[styles.statsRow, !isLate && styles.statsBorder]}>
           <View style={styles.stat}><Text style={[styles.statLabel, !isLate && styles.heroMuted]}>SCHOOL ENDS</Text><Text style={[styles.statValue, !isLate && styles.heroText]}>{dismissal}</Text></View>
           <View style={styles.statDivider} />
-          <View style={styles.stat}><Text style={[styles.statLabel, !isLate && styles.heroMuted]}>ETA</Text><Text style={[styles.statValue, !isLate && styles.heroText]}>{atSchool ? "Waiting" : `${pickupStatus.etaMinutes} min`}</Text></View>
+          <View style={styles.stat}><Text style={[styles.statLabel, !isLate && styles.heroMuted]}>ETA</Text><Text style={[styles.statValue, !isLate && styles.heroText]}>{isArrived ? "Complete" : isCovered ? "Covered" : atSchool ? "Waiting" : `${pickupStatus.etaMinutes} min`}</Text></View>
           <View style={styles.statDivider} />
           <View style={styles.stat}><Text style={[styles.statLabel, !isLate && styles.heroMuted]}>COLLECTOR</Text><Text style={[styles.statValue, !isLate && styles.heroText]}>{collector?.name ?? "Not set"}</Text></View>
         </View>
         <Text style={[styles.simulatedNote, !isLate && styles.heroMuted]}>Demo only · Location and journey status are simulated</Text>
-        <PrimaryButton label={backupRequested ? "Backup request sent" : "Request backup pickup"} disabled={backupRequested || backupRequest.state !== "idle"} onPress={() => setBackupRequested(true)} />
+        <PrimaryButton label={backupRequest.state === "requested" ? "Waiting for response" : backupRequest.state === "accepted" ? "Backup pickup accepted" : canRequestBackup ? "Request backup pickup" : "Backup response received"} disabled={!canRequestBackup || trustedHelpers.every((helper) => helper.state !== "active")} onPress={requestBackup} />
         <Link href="/plan" asChild><Pressable accessibilityRole="button" style={styles.journeyLink}><Text style={[styles.journeyLinkText, !isLate && styles.heroButtonText]}>View pickup plan  →</Text></Pressable></Link>
       </Card>
 
