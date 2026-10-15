@@ -5,6 +5,7 @@ import { AppShell } from "../shared/AppShell";
 import { useAppContext } from "../shared/AppContext";
 import { Avatar } from "../shared/Avatar";
 import { Card } from "../shared/Card";
+import { SecondaryButton } from "../shared/SecondaryButton";
 import { SectionHeading } from "../shared/SectionHeading";
 import { StatusPill } from "../shared/StatusPill";
 import { mockData } from "../shared/mockData";
@@ -25,10 +26,10 @@ const textOptions: { value: TextScale; label: string; sample: string }[] = [
 ];
 
 export function ProfileSettings() {
-  const { theme, selectedCaregiver, themeMode, setThemeMode, textScale, setTextScale } = useAppContext();
+  const { theme, selectedCaregiver, themeMode, setThemeMode, textScale, setTextScale, trustedHelpers, clearCaregiver } = useAppContext();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const caregiver = selectedCaregiver ?? mockData.caregivers[0];
-  const { child, school, caregivers, familyMembers, trustedHelpers } = mockData;
+  const { child, school, caregivers, familyMembers } = mockData;
   const approvedHelpers = trustedHelpers.filter((helper) => helper.state === "active").length;
 
   return (
@@ -110,6 +111,8 @@ export function ProfileSettings() {
         <View style={styles.divider} />
         <SettingRow title="Privacy and location" subtitle="Location shown elsewhere in the app is simulated." last />
       </Card>
+      <SecondaryButton label="Switch profile" onPress={clearCaregiver} />
+      <Text style={styles.demoNote}>Returns to the demo profile selector. No account session is ended.</Text>
       <Text style={styles.footer}>Settings are held in app memory for this session only.</Text>
     </AppShell>
   );

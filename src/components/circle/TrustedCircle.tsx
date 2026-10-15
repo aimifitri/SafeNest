@@ -12,22 +12,19 @@ import type { FamilyMember, TrustedHelper } from "../shared/types";
 import type { ThemeTokens } from "../shared/theme";
 
 export function TrustedCircle() {
-  const { theme } = useAppContext();
+  const { theme, trustedHelpers, setTrustedHelperState } = useAppContext();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const [approvedIds, setApprovedIds] = useState<string[]>(() => mockData.trustedHelpers.filter((helper) => helper.state === "active").map((helper) => helper.id));
-  const [pendingIds, setPendingIds] = useState<string[]>(() => mockData.trustedHelpers.filter((helper) => helper.state === "pending").map((helper) => helper.id));
   const [notice, setNotice] = useState("");
-  const approvedHelpers = mockData.trustedHelpers.filter((helper) => approvedIds.includes(helper.id));
-  const pendingHelpers = mockData.trustedHelpers.filter((helper) => pendingIds.includes(helper.id));
+  const approvedHelpers = trustedHelpers.filter((helper) => helper.state === "active");
+  const pendingHelpers = trustedHelpers.filter((helper) => helper.state === "pending");
   const familyMembers = mockData.familyMembers;
 
   const approve = (helper: TrustedHelper) => {
-    setPendingIds((current) => current.filter((id) => id !== helper.id));
-    setApprovedIds((current) => current.includes(helper.id) ? current : [...current, helper.id]);
+    setTrustedHelperState(helper.id, "active");
     setNotice(`${helper.name} approved in this demo.`);
   };
   const reject = (helper: TrustedHelper) => {
-    setPendingIds((current) => current.filter((id) => id !== helper.id));
+    setTrustedHelperState(helper.id, "rejected");
     setNotice(`${helper.name} request declined in this demo.`);
   };
 
@@ -41,12 +38,12 @@ export function TrustedCircle() {
 
       <SectionHeading title="Family" />
       <Card style={styles.listCard}>
-        {familyMembers.map((member, index) => renderMember(member, index, member.id === mockData.pickupStatus.collectorId))}
+        {familyMembers.map((member, index) => renderMember(member, index, "family", member.id === mockData.pickupStatus.collectorId))}
       </Card>
 
       <SectionHeading title="Trusted circle" />
       <Card style={styles.listCard}>
-        {approvedHelpers.length ? approvedHelpers.map((helper, index) => renderMember(helper, index, helper.id === mockData.pickupStatus.collectorId)) : <Text style={styles.empty}>Nobody yet.</Text>}
+        {approvedHelpers.length ? approvedHelpers.map((helper, index) => renderMember(helper, index, "helper", helper.id === mockData.pickupStatus.collectorId)) : <Text style={styles.empty}>Nobody yet.</Text>}
       </Card>
 
       {pendingHelpers.length > 0 ? <>
@@ -75,7 +72,7 @@ export function TrustedCircle() {
     </AppShell>
   );
 
-  function renderMember(member: FamilyMember | TrustedHelper, index: number, isCollector: boolean) {
+  function renderMember(member: FamilyMember | TrustedHelper, index: number, kind: "family" | "helper", isCollector: boolean) {
     const location = member.locationLabel;
     return <View key={member.id}>
       {index > 0 ? <View style={styles.separator} /> : null}
@@ -86,7 +83,7 @@ export function TrustedCircle() {
           <Text style={styles.memberMeta}>{member.role}</Text>
           <Text style={styles.location}>{location ?? "Location not shared"}</Text>
         </View>
-        <StatusPill label={"state" in member ? "Approved" : "Family"} tone="success" />
+        <StatusPill label={kind === "helper" ? "Approved" : "Family"} tone="success" />
       </View>
     </View>;
   }

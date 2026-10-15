@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppShell } from "../shared/AppShell";
 import { useAppContext } from "../shared/AppContext";
@@ -17,51 +18,70 @@ const weekdays: { key: Weekday; label: string }[] = [
   { key: 1, label: "Monday" }, { key: 2, label: "Tuesday" }, { key: 3, label: "Wednesday" }, { key: 4, label: "Thursday" }, { key: 5, label: "Friday" },
 ];
 
+const dismissalOptions = ["11:00 AM", "11:30 AM", "12:00 PM", "12:30 PM", "1:00 PM", "1:30 PM", "2:00 PM", "2:30 PM", "3:00 PM"];
+
 export function PickupPlan() {
-  const { theme } = useAppContext();
+  const {
+    theme, trustedHelpers, temporaryDismissal, setTemporaryDismissal,
+    backupRequest, requestBackupPickup, respondToBackupPickup, resetBackupRequest,
+  } = useAppContext();
+  const insets = useSafeAreaInsets();
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const { child, school, schedule, trustedHelpers, pickupStatus, teacherPhotoVerification } = mockData;
+  const { child, school, schedule, pickupStatus, teacherPhotoVerification } = mockData;
   const weekdayNumber = new Date().getDay();
   const today: Weekday = (weekdayNumber === 0 ? 1 : Math.min(weekdayNumber, 5)) as Weekday;
   const todayLabel = weekdays.find((day) => day.key === today)?.label ?? "Today";
   const originalDismissal = schedule.weekdayTimes[today];
-  const [temporaryDismissal, setTemporaryDismissal] = useState<string | null>(null);
-  const [dismissalDraft, setDismissalDraft] = useState("");
-  const [backupState, setBackupState] = useState<BackupRequestState>(mockData.backupRequest.state);
-  const [backupHelperId, setBackupHelperId] = useState<string | null>(null);
+  const dismissalOverride = temporaryDismissal?.weekday === today ? temporaryDismissal.time : null;
+  const dismissal = dismissalOverride ?? originalDismissal;
+  const [isDismissalModalVisible, setIsDismissalModalVisible] = useState(false);
+  const [selectedDismissal, setSelectedDismissal] = useState(dismissal);
+  const availableHelpers = trustedHelpers.filter((helper) => helper.state === "active");
+  const [selectedHelperId, setSelectedHelperId] = useState<string | null>(availableHelpers[0]?.id ?? null);
   const [verificationState, setVerificationState] = useState<VerificationState>(teacherPhotoVerification.state);
   const [notice, setNotice] = useState("");
-  const dismissal = temporaryDismissal ?? originalDismissal;
-  const collector = [...mockData.familyMembers, ...trustedHelpers].find((person) => person.id === pickupStatus.collectorId);
-  const availableHelpers = trustedHelpers.filter((helper) => helper.state === "active");
-  const backupHelper = availableHelpers.find((helper) => helper.id === backupHelperId);
+  const backupState = backupRequest.state;
+  const selectedBackupHelperId = backupState === "requested" && backupRequest.helperId
+    ? backupRequest.helperId
+    : selectedHelperId;
+  const backupHelper = trustedHelpers.find((helper) => helper.id === backupRequest.helperId)
+    ?? availableHelpers.find((helper) => helper.id === selectedHelperId);
+  const scheduledCollector = [...mockData.familyMembers, ...trustedHelpers].find((person) => person.id === pickupStatus.collectorId);
+  const collector = backupState === "accepted" ? backupHelper ?? scheduledCollector : scheduledCollector;
+
+  const openDismissalSelector = () => {
+    setSelectedDismissal(dismissal);
+    setIsDismissalModalVisible(true);
+  };
 
   const saveDismissal = () => {
-    const value = dismissalDraft.trim();
-    if (!/^((0?[1-9])|(1[0-2])):[0-5][0-9]\s?(AM|PM)$/i.test(value)) {
-      setNotice("Enter a time like 12:30 PM to save the demo change.");
-      return;
-    }
-    setTemporaryDismissal(value.toUpperCase());
-    setDismissalDraft("");
-    setNotice(`Temporary dismissal set to ${value.toUpperCase()} for ${todayLabel}.`);
+    setTemporaryDismissal({ weekday: today, time: selectedDismissal });
+    setIsDismissalModalVisible(false);
+    setNotice(`Temporary dismissal set to ${selectedDismissal} for ${todayLabel}.`);
   };
 
   const resetDismissal = () => {
     setTemporaryDismissal(null);
-    setDismissalDraft("");
     setNotice(`Restored the usual ${todayLabel} dismissal time.`);
   };
 
   const requestBackup = () => {
-    const firstAvailable = availableHelpers[0];
-    setBackupHelperId(firstAvailable?.id ?? null);
-    setBackupState("requested");
-    setNotice(firstAvailable ? `Demo request sent to ${firstAvailable.name}.` : "Demo backup request started.");
+    const helper = availableHelpers.find((item) => item.id === selectedHelperId) ?? availableHelpers[0];
+    requestBackupPickup(helper?.id);
+    setNotice(helper ? `Demo request sent to ${helper.name}.` : "Demo backup request started.");
+  };
+
+  const selectBackupHelper = (helperId: string) => {
+    setSelectedHelperId(helperId);
+    if (backupState === "requested") {
+      const helper = availableHelpers.find((item) => item.id === helperId);
+      requestBackupPickup(helperId);
+      setNotice(helper ? `Demo request updated to ${helper.name}.` : "Demo backup request updated.");
+    }
   };
 
   const respondToBackup = (accepted: boolean) => {
-    setBackupState(accepted ? "accepted" : "declined");
+    respondToBackupPickup(accepted ? "accepted" : "declined");
     setNotice(accepted ? `${backupHelper?.name ?? "Helper"} accepted in this demo.` : `${backupHelper?.name ?? "Helper"} cannot help in this demo.`);
   };
 
@@ -101,23 +121,28 @@ export function PickupPlan() {
 
       <Card style={styles.changeCard}>
         <View style={styles.changeHeader}><View style={styles.grow}><Text style={styles.cardTitle}>School ending at a different time?</Text><Text style={styles.muted}>Set a temporary one-day dismissal time for {todayLabel}.</Text></View><StatusPill label="One day" tone="info" /></View>
-        {temporaryDismissal ? <View style={styles.overrideRow}><Text style={styles.overrideText}>{todayLabel}: {temporaryDismissal} (usual {originalDismissal})</Text><Pressable accessibilityRole="button" onPress={resetDismissal} style={styles.resetButton}><Text style={styles.resetText}>Reset</Text></Pressable></View> : <>
-          <TextInput accessibilityLabel="Temporary school dismissal time" value={dismissalDraft} onChangeText={setDismissalDraft} placeholder="For example, 12:30 PM" placeholderTextColor={theme.colors.muted} keyboardType="numbers-and-punctuation" autoCapitalize="characters" style={styles.input} />
-          <PrimaryButton label="Save today's time" onPress={saveDismissal} />
-        </>}
-        <Text style={styles.simulationNote}>Demo only · This change stays on this screen and resets when you leave.</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Choose dismissal time, currently ${dismissal}`} onPress={openDismissalSelector} style={({ pressed }) => [styles.timePickerButton, pressed && styles.timePickerPressed]}>
+          <View style={styles.grow}><Text style={styles.timePickerLabel}>Today · {todayLabel}</Text><Text style={styles.timePickerHint}>Tap to choose a time · Demo</Text></View>
+          <Text style={styles.timePickerValue}>{dismissal}  ›</Text>
+        </Pressable>
+        {dismissalOverride ? <View style={styles.overrideRow}><Text style={styles.overrideText}>Temporary demo time · Usual time {originalDismissal}</Text><Pressable accessibilityRole="button" onPress={resetDismissal} style={styles.resetButton}><Text style={styles.resetText}>Reset</Text></Pressable></View> : null}
+        <Text style={styles.simulationNote}>Demo only · This one-day change appears on Today and Plan. Reset to restore the usual time.</Text>
       </Card>
 
       <SectionHeading title="Pickup backup" />
       <Card style={styles.card}>
         <View style={styles.rowTop}><View style={styles.grow}><Text style={styles.cardTitle}>Ask a trusted helper</Text><Text style={styles.muted}>A backup request is simulated locally.</Text></View><StatusPill label={backupStateLabel(backupState)} tone={backupState === "accepted" ? "success" : backupState === "declined" ? "danger" : backupState === "requested" ? "warning" : "neutral"} /></View>
-        {backupState === "idle" ? <PrimaryButton label="Request backup pickup" onPress={requestBackup} /> : <>
-          {backupHelper ? <View style={styles.helperRow}><Avatar name={backupHelper.name} size={42} /><View style={styles.grow}><Text style={styles.helperName}>{backupHelper.name}</Text><Text style={styles.muted}>{backupHelper.role} · {backupHelper.locationLabel ?? "Location not shared"}</Text></View></View> : null}
+        {availableHelpers.length > 0 ? <View style={styles.helperChoices}>
+          {availableHelpers.map((helper) => <Pressable key={helper.id} accessibilityRole="radio" accessibilityState={{ checked: selectedBackupHelperId === helper.id }} onPress={() => selectBackupHelper(helper.id)} style={[styles.helperChoice, selectedBackupHelperId === helper.id && styles.helperChoiceSelected]}><Text style={[styles.helperChoiceName, selectedBackupHelperId === helper.id && styles.helperChoiceSelectedText]}>{helper.name}</Text><Text style={styles.helperChoiceRole}>{helper.role}</Text></Pressable>)}
+        </View> : null}
+        {backupState !== "idle" && backupHelper ? <View style={styles.helperRow}><Avatar name={backupHelper.name} size={42} /><View style={styles.grow}><Text style={styles.helperName}>{backupHelper.name}</Text><Text style={styles.muted}>{backupHelper.role} · {backupState === "accepted" ? "Accepted in this demo" : backupState === "declined" ? "Declined in this demo" : "Awaiting simulated response"}</Text></View></View> : null}
+        {backupState === "idle" || backupState === "accepted" || backupState === "declined" ? <PrimaryButton label={backupState === "idle" ? "Request backup pickup" : "Start another demo request"} disabled={availableHelpers.length === 0} onPress={requestBackup} /> : <>
           {backupState === "requested" ? <View style={styles.responseActions}>
             <Pressable accessibilityRole="button" onPress={() => respondToBackup(true)} style={styles.acceptButton}><Text style={styles.acceptText}>Simulate accept</Text></Pressable>
             <Pressable accessibilityRole="button" onPress={() => respondToBackup(false)} style={styles.declineButton}><Text style={styles.declineText}>Simulate decline</Text></Pressable>
           </View> : <SecondaryButton label="Start another demo request" onPress={requestBackup} />}
         </>}
+        {backupState !== "idle" ? <SecondaryButton label="Clear demo request" onPress={resetBackupRequest} /> : null}
         <Text style={styles.simulationNote}>No family member is contacted by these demo controls.</Text>
       </Card>
 
@@ -142,6 +167,30 @@ export function PickupPlan() {
         <Step number="3" title="Teacher checks the collector" detail={`${school.teacher} can confirm the pickup person before ${child.name} leaves.`} />
         <Step number="4" title="Child leaves after confirmation" detail="The teacher confirmation shown here is a local demo simulation." last />
       </Card>
+
+      <Modal visible={isDismissalModalVisible} transparent animationType="slide" onRequestClose={() => setIsDismissalModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Close dismissal time selector" onPress={() => setIsDismissalModalVisible(false)} style={styles.modalBackdrop} />
+          <View style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, theme.spacing.md) }]}>
+            <View style={styles.modalHandle} />
+            <Text accessibilityRole="header" style={styles.modalTitle}>Choose dismissal time</Text>
+            <Text style={styles.modalSubtitle}>Select a time for today. This demo change is temporary.</Text>
+            <ScrollView style={styles.timeOptionsList} contentContainerStyle={styles.timeOptionsContent} showsVerticalScrollIndicator>
+              {dismissalOptions.map((time) => {
+                const selected = selectedDismissal === time;
+                return <Pressable key={time} accessibilityRole="radio" accessibilityState={{ checked: selected }} onPress={() => setSelectedDismissal(time)} style={({ pressed }) => [styles.timeOption, selected && styles.timeOptionSelected, pressed && styles.timeOptionPressed]}>
+                  <Text style={[styles.timeOptionText, selected && styles.timeOptionTextSelected]}>{time}</Text>
+                  {selected ? <Text style={styles.timeOptionCheck}>✓</Text> : null}
+                </Pressable>;
+              })}
+            </ScrollView>
+            <View style={styles.modalActions}>
+              <SecondaryButton label="Cancel" onPress={() => setIsDismissalModalVisible(false)} />
+              <PrimaryButton label="Save demo time" onPress={saveDismissal} />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </AppShell>
   );
 
@@ -188,14 +237,39 @@ const makeStyles = (theme: ThemeTokens) => StyleSheet.create({
   separator: { height: 1, backgroundColor: theme.colors.line },
   changeCard: { marginTop: theme.spacing.sm, marginBottom: theme.spacing.md, gap: theme.spacing.sm }, changeHeader: { flexDirection: "row", alignItems: "flex-start", gap: theme.spacing.xs },
   cardTitle: { color: theme.colors.ink, fontSize: theme.type.body * theme.textScale, fontWeight: "800" },
-  input: { minHeight: 50, borderWidth: 1, borderColor: theme.colors.line, borderRadius: theme.radius.control, paddingHorizontal: theme.spacing.md, color: theme.colors.ink, backgroundColor: theme.colors.background, fontSize: theme.type.body * theme.textScale },
   simulationNote: { color: theme.colors.muted, fontSize: 10 * theme.textScale, lineHeight: 15 * theme.textScale, textAlign: "center" },
+  timePickerButton: { minHeight: 66, borderWidth: 1, borderColor: theme.colors.primary, borderRadius: theme.radius.control, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.xs, backgroundColor: theme.colors.primarySoft, flexDirection: "row", alignItems: "center", gap: theme.spacing.xs },
+  timePickerPressed: { opacity: 0.78 },
+  timePickerLabel: { color: theme.colors.primaryInk, fontSize: theme.type.body * theme.textScale, fontWeight: "800" },
+  timePickerHint: { color: theme.colors.muted, fontSize: theme.type.small * theme.textScale, marginTop: 3 },
+  timePickerValue: { color: theme.colors.primaryInk, fontSize: 18 * theme.textScale, fontWeight: "900" },
   overrideRow: { flexDirection: "row", alignItems: "center", gap: theme.spacing.sm, backgroundColor: theme.colors.primarySoft, borderRadius: theme.radius.control, padding: theme.spacing.sm },
   overrideText: { flex: 1, color: theme.colors.primaryInk, fontSize: theme.type.small * theme.textScale, fontWeight: "700" },
   resetButton: { minHeight: 40, paddingHorizontal: theme.spacing.md, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: theme.colors.line, backgroundColor: theme.colors.card, borderRadius: 12 },
   resetText: { color: theme.colors.primaryInk, fontSize: theme.type.small * theme.textScale, fontWeight: "800" },
+  modalOverlay: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.42)" },
+  modalBackdrop: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 },
+  modalSheet: { width: "100%", maxHeight: "90%", borderTopLeftRadius: 26, borderTopRightRadius: 26, borderWidth: 1, borderColor: theme.colors.line, backgroundColor: theme.colors.card, paddingTop: theme.spacing.sm, paddingHorizontal: theme.spacing.lg, gap: theme.spacing.xs },
+  modalHandle: { alignSelf: "center", width: 42, height: 5, borderRadius: 3, backgroundColor: theme.colors.line, marginBottom: theme.spacing.xs },
+  modalTitle: { color: theme.colors.ink, fontSize: 21 * theme.textScale, fontWeight: "900" },
+  modalSubtitle: { color: theme.colors.muted, fontSize: theme.type.small * theme.textScale, lineHeight: 17 * theme.textScale },
+  timeOptionsList: { flexShrink: 1, maxHeight: 420, marginTop: theme.spacing.xs },
+  timeOptionsContent: { gap: theme.spacing.xs, paddingBottom: theme.spacing.xs },
+  timeOption: { minHeight: 48, borderWidth: 1, borderColor: theme.colors.line, borderRadius: 13, paddingHorizontal: theme.spacing.md, backgroundColor: theme.colors.background, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  timeOptionSelected: { borderColor: theme.colors.primary, backgroundColor: theme.colors.primarySoft },
+  timeOptionPressed: { opacity: 0.75 },
+  timeOptionText: { color: theme.colors.ink, fontSize: theme.type.body * theme.textScale, fontWeight: "700" },
+  timeOptionTextSelected: { color: theme.colors.primaryInk, fontWeight: "900" },
+  timeOptionCheck: { color: theme.colors.primaryInk, fontSize: 18 * theme.textScale, fontWeight: "900" },
+  modalActions: { gap: theme.spacing.xs, paddingTop: theme.spacing.xs },
   rowTop: { flexDirection: "row", alignItems: "flex-start", gap: theme.spacing.sm },
   helperRow: { flexDirection: "row", alignItems: "center", gap: theme.spacing.sm, borderTopWidth: 1, borderTopColor: theme.colors.line, paddingTop: theme.spacing.sm },
+  helperChoices: { gap: theme.spacing.xs },
+  helperChoice: { padding: theme.spacing.sm, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.line, backgroundColor: theme.colors.background },
+  helperChoiceSelected: { borderColor: theme.colors.primary, backgroundColor: theme.colors.primarySoft },
+  helperChoiceName: { color: theme.colors.ink, fontSize: theme.type.small * theme.textScale, fontWeight: "700" },
+  helperChoiceSelectedText: { color: theme.colors.primaryInk },
+  helperChoiceRole: { color: theme.colors.muted, fontSize: 10 * theme.textScale, marginTop: 2 },
   helperName: { color: theme.colors.ink, fontSize: theme.type.body * theme.textScale, fontWeight: "800" },
   responseActions: { flexDirection: "row", gap: theme.spacing.sm },
   acceptButton: { flex: 1, minHeight: 48, alignItems: "center", justifyContent: "center", borderRadius: theme.radius.control, backgroundColor: theme.colors.primary },

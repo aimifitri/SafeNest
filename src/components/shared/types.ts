@@ -1,5 +1,5 @@
 export type PersonId = string;
-export type ContactState = "active" | "pending";
+export type ContactState = "active" | "pending" | "rejected";
 export type PickupState = "planned" | "onTrack" | "late" | "covered" | "arrived";
 export type BackupRequestState = "idle" | "requested" | "accepted" | "declined";
 export type VerificationState = "notStarted" | "photoPrepared" | "awaitingTeacher" | "approved" | "rejected";
