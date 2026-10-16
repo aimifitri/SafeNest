@@ -1,7 +1,12 @@
+
 import { Stack } from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
-import { AppProvider, useAppContext } from "../components/shared/AppContext";
+import {
+  AppProvider,
+  useAppContext,
+} from "../components/shared/AppContext";
+
 import { ProfileSelection } from "../components/shared/ProfileSelection";
 
 export default function RootLayout() {
@@ -16,13 +21,16 @@ export default function RootLayout() {
 
 function RootNavigator() {
   const { selectedCaregiver } = useAppContext();
-  if (!selectedCaregiver) return <ProfileSelection />;
+
+  if (!selectedCaregiver) {
+    return <ProfileSelection />;
+  }
 
   return (
     <Stack
       screenOptions={{
         headerShown: false,
-        animation: "slide_from_right",
+        animation: "none",
       }}
     />
   );
