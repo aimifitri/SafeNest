@@ -1,48 +1,67 @@
-import { StyleSheet, Text, View } from "react-native";
+import { useState } from "react";
+import { Image, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Avatar } from "./Avatar";
-import { Card } from "./Card";
-import { PrimaryButton } from "./PrimaryButton";
-import { SectionHeading } from "./SectionHeading";
 import { useAppContext } from "./AppContext";
 import { mockData } from "./mockData";
-import type { ThemeTokens } from "./theme";
+import { Press, Rise, T } from "./ui";
+
+const LOGO = require("../../../assets/images/logo.png");
 
 export function ProfileSelection() {
   const { theme, selectCaregiver } = useAppContext();
+  const c = theme.colors;
   const insets = useSafeAreaInsets();
-  const styles = makeStyles(theme, insets.top, insets.bottom);
-  return <View style={styles.screen}>
-    <View style={styles.content}>
-      <Text style={styles.eyebrow}>SAFENEST · DEMO</Text>
-      <Text accessibilityRole="header" style={styles.title}>Who’s using SafeNest?</Text>
-      <Text style={styles.subtitle}>Choose a family profile to explore the pickup demo.</Text>
-      <SectionHeading title="Family profiles" />
-      {mockData.caregivers.map((caregiver) => <Card key={caregiver.id}>
-        <View style={styles.profileRow}>
-          <Avatar name={caregiver.name} size={52} />
-          <View style={styles.profileText}>
-            <Text style={styles.name}>{caregiver.name}</Text>
-            <Text style={styles.role}>{caregiver.role}</Text>
+  const [w, setW] = useState(0);
+  const shadow = theme.isDark
+    ? "0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35)"
+    : "0 1px 2px rgba(18,55,71,.06), 0 8px 24px rgba(18,55,71,.10)";
+  const gap = 14;
+  const cols = Math.max(1, Math.floor((w + gap) / 144));
+  const iw = w ? (w - gap * (cols - 1)) / cols : 130;
+
+  return (
+    <View style={{ flex: 1, backgroundColor: c.background }}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{
+          flexGrow: 1,
+          alignItems: "center",
+          paddingTop: Math.max(28, insets.top + 16),
+          paddingBottom: Math.max(28, insets.bottom + 16),
+          paddingHorizontal: 16,
+        }}
+      >
+        <Image source={LOGO} style={{ width: 72, height: 72, borderRadius: 36 }} accessibilityLabel="SafeNest" />
+        <View accessibilityRole="header" style={{ marginTop: 14 }}>
+          <T s={1.9} w={800} ls={-0.03} lh={1.15} align="center">Who’s using SafeNest?</T>
+        </View>
+        <View style={{ marginTop: 6 }}>
+          <T c="muted" align="center">Choose a family profile to explore the pickup demo.</T>
+        </View>
+
+        <View style={{ width: "100%", flexGrow: 1, justifyContent: "center" }}>
+          <View onLayout={(e) => setW(e.nativeEvent.layout.width)} style={{ width: "100%", flexDirection: "row", flexWrap: "wrap", gap, paddingVertical: 28 }}>
+            {mockData.caregivers.map((caregiver, i) => (
+              <Rise key={caregiver.id} i={i + 1} style={{ width: iw }}>
+                <Press
+                  onPress={() => selectCaregiver(caregiver)}
+                  label={`Continue as ${caregiver.name}`}
+                  scaleTo={0.96}
+                  style={{ alignItems: "center", gap: 10, paddingVertical: 20, paddingHorizontal: 10, backgroundColor: c.card, borderWidth: 1, borderColor: c.line, borderRadius: 24, boxShadow: shadow }}
+                >
+                  <Avatar name={caregiver.name} size={84} />
+                  <T s={1.1} w={700}>{caregiver.name}</T>
+                  <View style={{ marginTop: -8 }}><T c="muted">{caregiver.role}</T></View>
+                </Press>
+              </Rise>
+            ))}
           </View>
         </View>
-        <PrimaryButton label={`Continue as ${caregiver.name}`} onPress={() => selectCaregiver(caregiver)} />
-      </Card>)}
-      <Text style={styles.simulated}>Demo profile selection only. No account is created or authenticated.</Text>
-    </View>
-  </View>;
-}
 
-const makeStyles = (theme: ThemeTokens, top: number, bottom: number) => StyleSheet.create({
-  screen: { flex: 1, justifyContent: "center", backgroundColor: theme.colors.background, paddingTop: top, paddingBottom: bottom },
-  content: { paddingHorizontal: theme.spacing.lg, gap: theme.spacing.md },
-  eyebrow: { color: theme.colors.primary, fontSize: theme.type.small * theme.textScale, fontWeight: "800", letterSpacing: 1.2 },
-  title: { color: theme.colors.ink, fontSize: theme.type.title * theme.textScale, fontWeight: "800" },
-  subtitle: { color: theme.colors.muted, fontSize: theme.type.body * theme.textScale },
-  profileRow: { flexDirection: "row", alignItems: "center", gap: theme.spacing.md, marginBottom: theme.spacing.md },
-  profileText: { flex: 1 },
-  name: { color: theme.colors.ink, fontSize: 18 * theme.textScale, fontWeight: "800" },
-  role: { color: theme.colors.muted, fontSize: theme.type.body * theme.textScale, marginTop: theme.spacing.xxs },
-  simulated: { color: theme.colors.muted, fontSize: theme.type.small * theme.textScale, textAlign: "center", marginTop: theme.spacing.xs },
-});
+        <T s={0.88} lh={1.4} c="muted" align="center">Demo profile selection only. No account is created or authenticated.</T>
+      </ScrollView>
+    </View>
+  );
+}

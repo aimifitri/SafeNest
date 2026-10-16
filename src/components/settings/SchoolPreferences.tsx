@@ -1,27 +1,29 @@
 import { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { View } from "react-native";
 
-import { useAppContext } from "../shared/AppContext";
 import { Card } from "../shared/Card";
 import { SectionHeading } from "../shared/SectionHeading";
 import { mockData } from "../shared/mockData";
-import type { ThemeTokens } from "../shared/theme";
+import { Press, SIc, Switch, T, useColors } from "../shared/ui";
 
 const preferenceOptions = [
   {
     key: "pickup",
     label: "Pickup alerts",
     description: "A reminder before school pickup time.",
+    icon: "bell",
   },
   {
     key: "gate",
     label: "Gate status",
     description: `When ${mockData.child.name} is released for pickup.`,
+    icon: "school",
   },
   {
     key: "delay",
     label: "Delay alerts",
     description: "When a pickup arrival time changes.",
+    icon: "clock",
   },
 ] as const;
 
@@ -29,13 +31,12 @@ type PreferenceKey = (typeof preferenceOptions)[number]["key"];
 type Preferences = Record<PreferenceKey, boolean>;
 
 export function SchoolPreferences() {
-  const { theme } = useAppContext();
+  const c = useColors();
   const [preferences, setPreferences] = useState<Preferences>({
     pickup: true,
     gate: true,
     delay: true,
   });
-  const styles = makeStyles(theme);
 
   function togglePreference(key: PreferenceKey) {
     setPreferences((current) => ({ ...current, [key]: !current[key] }));
@@ -43,50 +44,35 @@ export function SchoolPreferences() {
 
   return (
     <>
-      <SectionHeading title="School preferences" />
-      <Card style={styles.card}>
+      <SectionHeading title="Notifications" />
+      <Card tight>
         {preferenceOptions.map((option, index) => {
           const enabled = preferences[option.key];
 
           return (
-            <View key={option.key}>
-              {index > 0 ? <View style={styles.separator} /> : null}
-              <Pressable
-                accessibilityRole="switch"
-                accessibilityLabel={option.label}
-                accessibilityHint={option.description}
-                accessibilityState={{ checked: enabled }}
-                onPress={() => togglePreference(option.key)}
-                style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-              >
-                <View style={styles.copy}>
-                  <Text style={styles.label}>{option.label}</Text>
-                  <Text style={styles.description}>{option.description}</Text>
-                </View>
-                <View style={[styles.track, enabled && styles.trackEnabled]}>
-                  <View style={[styles.thumb, enabled && styles.thumbEnabled]} />
-                </View>
-              </Pressable>
-            </View>
+            <Press
+              key={option.key}
+              role="switch"
+              label={option.label}
+              hint={option.description}
+              state={{ checked: enabled }}
+              scaleTo={0.985}
+              onPress={() => togglePreference(option.key)}
+              style={{ flexDirection: "row", alignItems: "center", gap: 14, minHeight: 64, padding: 10, borderTopWidth: index > 0 ? 1 : 0, borderTopColor: c.line }}
+            >
+              <SIc name={option.icon} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <T w={700}>{option.label}</T>
+                <T s={0.84} c="muted" lh={1.35}>{option.description}</T>
+              </View>
+              <Switch on={enabled} />
+            </Press>
           );
         })}
-        <Text style={styles.demoNote}>Preference switches are simulated in this demo; no notifications are sent.</Text>
+        <View style={{ paddingHorizontal: 10, paddingBottom: 10 }}>
+          <T s={0.78} lh={1.4} c="muted">Simulated. No notifications are sent.</T>
+        </View>
       </Card>
     </>
   );
 }
-
-const makeStyles = (theme: ThemeTokens) => StyleSheet.create({
-  card: { marginTop: theme.spacing.sm, marginBottom: theme.spacing.md, paddingVertical: theme.spacing.xs, paddingHorizontal: theme.spacing.xs },
-  row: { minHeight: 64, flexDirection: "row", alignItems: "center", gap: theme.spacing.sm, padding: 10, borderRadius: theme.radius.control },
-  copy: { flex: 1, minWidth: 0 },
-  label: { color: theme.colors.ink, fontSize: theme.type.body * theme.textScale, fontWeight: "700" },
-  description: { color: theme.colors.muted, fontSize: theme.type.small * theme.textScale, lineHeight: 16 * theme.textScale, marginTop: 2 },
-  track: { width: 52, height: 32, borderRadius: 16, backgroundColor: theme.colors.line, justifyContent: "center", padding: 3 },
-  trackEnabled: { backgroundColor: theme.colors.primary },
-  thumb: { width: 26, height: 26, borderRadius: 13, backgroundColor: "#FFFFFF", shadowColor: "#000000", shadowOpacity: 0.22, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 2 },
-  thumbEnabled: { transform: [{ translateX: 20 }] },
-  separator: { height: 1, backgroundColor: theme.colors.line },
-  demoNote: { color: theme.colors.muted, fontSize: 10 * theme.textScale, lineHeight: 15 * theme.textScale, marginHorizontal: 10, marginTop: theme.spacing.xs, marginBottom: theme.spacing.xs },
-  pressed: { opacity: 0.78 },
-});

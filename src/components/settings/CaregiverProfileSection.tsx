@@ -1,93 +1,95 @@
-import { StyleSheet, Text, View } from "react-native";
+import { useState } from "react";
+import { View } from "react-native";
 
 import { Avatar } from "../shared/Avatar";
 import { useAppContext } from "../shared/AppContext";
 import { Card } from "../shared/Card";
 import { SectionHeading } from "../shared/SectionHeading";
 import { mockData } from "../shared/mockData";
-import type { ThemeTokens } from "../shared/theme";
+import { Disclosure } from "../shared/Disclosure";
+import { Sheet } from "../shared/Sheet";
+import { isValidEmail, isValidPhone, saveProfileEdit, useProfileEdits } from "../shared/profileEdits";
+import { Banner, Btn, Dl, Err, Field, Input, Row, T } from "../shared/ui";
 
 export function CaregiverProfileSection() {
   const { theme, selectedCaregiver } = useAppContext();
-  const caregiver = selectedCaregiver ?? mockData.caregivers[0];
-  const emergencyContact = mockData.caregivers.find((person) => person.id !== caregiver.id);
-  const { child } = mockData;
-  const styles = makeStyles(theme);
-
+  const c = theme.colors;
+  const edits = useProfileEdits();
+  const base = selectedCaregiver ?? mockData.caregivers[0];
+  const caregiver = { ...base, ...edits[base.id] };
+  const otherBase = mockData.caregivers.find((person) => person.id !== base.id);
+  const emergencyContact = otherBase ? { ...otherBase, ...edits[otherBase.id] } : undefined;
+  const [editing, setEditing] = useState(false);
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState("");
+  const openEdit = () => {
+    setPhone(caregiver.phone);
+    setEmail(caregiver.email);
+    setError("");
+    setEditing(true);
+  };
+  const save = () => {
+    if (!isValidPhone(phone)) return setError("Enter a phone number with digits, for example +60 12-345 6789.");
+    if (!isValidEmail(email)) return setError("Enter an email address like name@example.com.");
+    saveProfileEdit(base.id, { phone: phone.trim(), email: email.trim() });
+    setEditing(false);
+    setSaved("Contact details updated for this demo session.");
+  };
+  
   return (
     <>
-      <SectionHeading title="Caregiver profile" />
-      <Card style={styles.card}>
-        <View style={styles.profileTop}>
-          <Avatar name={caregiver.name} size={60} />
-          <View style={styles.profileInfo}>
-            <Text style={styles.name}>{caregiver.name}</Text>
-            <Text style={styles.role}>{caregiver.role}{caregiver.isAdmin ? " · Admin" : ""}</Text>
-            <Text style={styles.email}>{caregiver.email}</Text>
+      <SectionHeading title="Your profile" />
+      <Card>
+        <Row first style={{ paddingTop: 0, paddingBottom: 6, gap: 16 }}>
+          <Avatar name={caregiver.name} size={64} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <T s={1.3} w={800} ls={-0.01}>{caregiver.name}</T>
+            <T s={0.88} w={700} c={c.primaryInk}>{caregiver.role}{caregiver.isAdmin ? " · Admin" : ""}</T>
+            <T s={0.88} c="muted">{caregiver.email}</T>
           </View>
+        </Row>
+        <Dl k="Phone" v={caregiver.phone} />
+        <View style={{ marginTop: 10, gap: 10 }}>
+          {saved ? <Banner key={saved} kind="ok">{saved}</Banner> : null}
+          <Btn kind="s" sm icon="me" onPress={openEdit} label="Edit contact details">Edit contact details</Btn>
+          <T s={0.78} lh={1.4} c="muted">Fictional demo profile · Changes stay in app memory for this session. No account is changed.</T>
         </View>
-        <DetailRow label="Phone" value={caregiver.phone} />
-        <Text style={styles.demoNote}>Fictional demo profile · Profile edits and account services are not connected.</Text>
       </Card>
 
-      <SectionHeading title="Emergency contact" />
-      <Card style={styles.card}>
+      <Disclosure title="Emergency contact" sub={emergencyContact ? `${emergencyContact.name}, ${emergencyContact.role}` : "None listed"}>
         {emergencyContact ? (
           <>
-            <View style={styles.profileTop}>
-              <Avatar name={emergencyContact.name} size={46} />
-              <View style={styles.profileInfo}>
-                <Text style={styles.detailTitle}>{emergencyContact.name}</Text>
-                <Text style={styles.detailSub}>{emergencyContact.role}</Text>
+            <Row first style={{ paddingTop: 0, paddingBottom: 6 }}>
+              <Avatar name={emergencyContact.name} size={44} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <T w={700}>{emergencyContact.name}</T>
+                <T s={0.84} c="muted" lh={1.35}>{emergencyContact.role}</T>
               </View>
-            </View>
-            <DetailRow label="Phone" value={emergencyContact.phone} />
-            <DetailRow label="Email" value={emergencyContact.email} last />
+            </Row>
+            <Dl k="Phone" v={emergencyContact.phone} />
+            <Dl k="Email" v={emergencyContact.email} />
           </>
         ) : (
-          <Text style={styles.detailSub}>No emergency contact is listed in the demo profiles.</Text>
+          <T s={0.88} c="muted">No emergency contact is listed in the demo profiles.</T>
         )}
-      </Card>
+      </Disclosure>
 
-      <SectionHeading title="Linked family profile" />
-      <Card style={styles.card}>
-        <View style={styles.profileTop}>
-          <Avatar name={child.name} size={46} />
-          <View style={styles.profileInfo}>
-            <Text style={styles.detailTitle}>{child.name}, age {child.age}</Text>
-            <Text style={styles.detailSub}>Class {child.className}</Text>
-          </View>
+      <Sheet visible={editing} onClose={() => setEditing(false)} title="Edit contact details" closeLabel="Close edit contact details">
+        <T c="muted" lh={1.4}>Update how {base.name} appears in this demo. Nothing is sent anywhere.</T>
+        <Field label="Phone number">
+          <Input accessibilityLabel="Phone number" keyboardType="phone-pad" value={phone} onChangeText={(v: string) => { setPhone(v); setError(""); }} />
+        </Field>
+        <Field label="Email">
+          <Input accessibilityLabel="Email address" keyboardType="email-address" autoCapitalize="none" value={email} onChangeText={(v: string) => { setEmail(v); setError(""); }} />
+        </Field>
+        <Err text={error} />
+        <View style={{ flexDirection: "row", gap: 10 }}>
+          <Btn kind="o" flex onPress={() => setEditing(false)}>Cancel</Btn>
+          <Btn kind="p" flex icon="check" onPress={save}>Save details</Btn>
         </View>
-        <Text style={styles.demoNote}>Linked family details use fictional demo data.</Text>
-      </Card>
+      </Sheet>
     </>
   );
 }
-
-function DetailRow({ label, value, last = false }: { label: string; value: string; last?: boolean }) {
-  const { theme } = useAppContext();
-  const styles = makeStyles(theme);
-
-  return (
-    <View style={[styles.detailRow, last && styles.detailRowLast]}>
-      <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={styles.detailValue}>{value}</Text>
-    </View>
-  );
-}
-
-const makeStyles = (theme: ThemeTokens) => StyleSheet.create({
-  card: { marginTop: theme.spacing.sm, marginBottom: theme.spacing.md },
-  profileTop: { flexDirection: "row", alignItems: "center", gap: theme.spacing.sm },
-  profileInfo: { flex: 1, minWidth: 0 },
-  name: { color: theme.colors.ink, fontSize: 20 * theme.textScale, fontWeight: "800" },
-  role: { color: theme.colors.primaryInk, fontSize: theme.type.small * theme.textScale, fontWeight: "700", marginTop: 3 },
-  email: { color: theme.colors.muted, fontSize: theme.type.small * theme.textScale, marginTop: 4 },
-  detailTitle: { color: theme.colors.ink, fontSize: theme.type.body * theme.textScale, fontWeight: "800" },
-  detailSub: { color: theme.colors.muted, fontSize: theme.type.small * theme.textScale, marginTop: 3 },
-  detailRow: { paddingTop: theme.spacing.sm, gap: 3 },
-  detailRowLast: { paddingBottom: 0 },
-  detailLabel: { color: theme.colors.muted, fontSize: theme.type.small * theme.textScale },
-  detailValue: { color: theme.colors.ink, fontSize: theme.type.body * theme.textScale, fontWeight: "600", lineHeight: 20 * theme.textScale },
-  demoNote: { color: theme.colors.muted, fontSize: 10 * theme.textScale, lineHeight: 15 * theme.textScale, marginTop: theme.spacing.sm },
-});

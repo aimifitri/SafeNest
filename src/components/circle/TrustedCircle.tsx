@@ -1,16 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { useEffect, useState } from "react";
+import { View } from "react-native";
 
+import { Icon } from "../navigation/Icon";
 import { AppShell } from "../shared/AppShell";
 import { useAppContext } from "../shared/AppContext";
 import { Avatar } from "../shared/Avatar";
@@ -18,10 +9,14 @@ import { Card } from "../shared/Card";
 import { PrimaryButton } from "../shared/PrimaryButton";
 import { SecondaryButton } from "../shared/SecondaryButton";
 import { SectionHeading } from "../shared/SectionHeading";
+import { Sheet } from "../shared/Sheet";
+import { TimeWheelPicker } from "../shared/TimeWheel";
 import { StatusPill } from "../shared/StatusPill";
+import { setLocalPendingCount } from "../shared/pendingBadge";
 import { mockData } from "../shared/mockData";
+import { useProfileEdits } from "../shared/profileEdits";
+import { Banner, Btn, Chip, Err, Field, Input, Lead, SmallBtn, Press, Rise, T, Tag, useColors } from "../shared/ui";
 import type { FamilyMember, TrustedHelper } from "../shared/types";
-import type { ThemeTokens } from "../shared/theme";
 
 type LocalTrustedHelper = TrustedHelper & { age: number };
 
@@ -33,12 +28,14 @@ type LocalBackupPickupRequest = {
   approvedBy?: string;
 };
 
-const wheelItemHeight = 40;
 
 export function TrustedCircle() {
   const { theme, selectedCaregiver, trustedHelpers, setTrustedHelperState } = useAppContext();
-  const styles = useMemo(() => makeStyles(theme), [theme]);
+  const profileEdits = useProfileEdits();
+  const colors = theme.colors;
   const [notice, setNotice] = useState("");
+  // Details (phone, location, controls) are hidden until a person is tapped.
+  const [openIds, setOpenIds] = useState<Record<string, boolean>>({});
   const [availabilityTimes, setAvailabilityTimes] = useState<Record<string, string>>({
     abu: "3:00 PM",
     siti: "2:00 PM",
@@ -70,6 +67,12 @@ export function TrustedCircle() {
   const [newHelperRole, setNewHelperRole] = useState("");
   const [newHelperPhone, setNewHelperPhone] = useState("");
   const [formError, setFormError] = useState("");
+
+  const localPendingCount = localHelpers.filter((helper) => helper.state === "pending").length;
+  useEffect(() => {
+    setLocalPendingCount(localPendingCount);
+    return () => setLocalPendingCount(0);
+  }, [localPendingCount]);
 
   const approvedHelpers = [
     ...trustedHelpers.filter((helper) => helper.state === "active"),
@@ -209,137 +212,37 @@ export function TrustedCircle() {
 
   const getContactDetail = (member: FamilyMember | TrustedHelper) => {
     const caregiver = mockData.caregivers.find((item) => item.id === member.id);
-    if (caregiver) return caregiver.phone;
+    if (caregiver) return profileEdits[caregiver.id]?.phone ?? caregiver.phone;
     if (member.id === "aiman") return "+60 11-3344 5566";
     return localHelperPhones[member.id] ?? "Phone not shared";
   };
 
   return (
     <AppShell title="Trusted Circle" badge="Circle" activeTab="circle">
-      <Text style={styles.lead}>Your family and approved helpers for school pickup.</Text>
-      <View style={styles.demoNotice}>
-        <View style={styles.demoDot} />
-        <Text style={styles.demoText}>
-          Demo contacts · Pickup availability and contact details are simulated
-        </Text>
-      </View>
-      {notice ? <Text accessibilityLiveRegion="polite" style={styles.actionNotice}>{notice}</Text> : null}
-
-      <SectionHeading title="Family Members" />
-      <Card style={styles.listCard}>
-        {familyMembers.map((member, index) => renderMember(
-          member,
-          index,
-          "family",
-        ))}
-      </Card>
-
-      <SectionHeading title="Approved Helpers" />
-      <Card style={styles.listCard}>
-        {approvedHelpers.length ? (
-          <>
-            {primaryHelpers.length > 0 ? (
-              <>
-                <Text style={styles.groupHeading}>Primary Emergency Contacts</Text>
-                {primaryHelpers.map((helper, index) => renderMember(helper, index, "helper"))}
-              </>
-            ) : null}
-            {regularHelpers.length > 0 ? (
-              <>
-                <Text style={styles.groupHeading}>Regular Helpers</Text>
-                {regularHelpers.map((helper, index) => renderMember(helper, index, "helper"))}
-              </>
-            ) : null}
-          </>
-        )
-          : <Text style={styles.empty}>No approved helpers yet.</Text>}
-      </Card>
-      <Card style={styles.requestCard}>
-        <Text style={styles.requestHeading}>Backup pickup</Text>
-        <Text style={styles.modalDescription}>
-          Send a simulated request to every approved helper who is currently available.
-        </Text>
-        {backupPickupRequest ? (
-          <View style={styles.broadcastNotice}>
-            <StatusPill
-              label={backupPickupRequest.state === "approved" ? "Helper accepted" : "Request sent"}
-              tone={backupPickupRequest.state === "approved" ? "success" : "warning"}
-            />
-            <Text style={styles.broadcastText}>
-              Pickup requested for {backupPickupRequest.pickupTime}. Alerts sent to{" "}
-              {backupPickupRequest.recipientIds.length} available helper
-              {backupPickupRequest.recipientIds.length === 1 ? "" : "s"}.
-            </Text>
-            {backupPickupRequest.state === "pending" && backupPickupRequest.recipientIds.length > 0 ? (
-              <>
-                <Text style={styles.demoActionLabel}>Simulate a helper response:</Text>
-                {approvedHelpers
-                  .filter((helper) => backupPickupRequest.recipientIds.includes(helper.id))
-                  .map((helper) => (
-                    <Pressable
-                      key={helper.id}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Simulate ${helper.name} approving the pickup request`}
-                      onPress={() => simulateHelperApproval(helper)}
-                      style={({ pressed }) => [styles.simulateButton, pressed && styles.pressed]}
-                    >
-                      <Text style={styles.simulateButtonText}>Simulate {helper.name} Approval</Text>
-                    </Pressable>
-                  ))}
-              </>
-            ) : null}
-          </View>
-        ) : null}
-        <PrimaryButton
-          label={backupPickupRequest?.state === "pending" ? "Send another backup request" : "Request backup pickup"}
-          onPress={() => openTimePicker("backup")}
-          disabled={availableHelpers.length === 0}
-        />
-        {availableHelpers.length === 0 ? (
-          <Text style={styles.modalFootnote}>No approved helpers are currently available.</Text>
-        ) : null}
-      </Card>
+      <Lead>Who can collect {mockData.child.name}. Tap a name for details.</Lead>
+      {notice ? <Banner key={notice} kind="ok">{notice}</Banner> : null}
 
       {pendingHelpers.length > 0 ? (
         <>
-          <SectionHeading title="Pending Helper Approvals" />
-          <Card style={styles.listCard}>
+          <SectionHeading title="Waiting for approval" />
+          <Card tight>
             {pendingHelpers.map((helper, index) => (
-              <View key={helper.id}>
-                {index > 0 ? <View style={styles.separator} /> : null}
-                <View style={styles.memberRow}>
-                  <Avatar name={helper.name} size={46} />
-                  <View style={styles.memberInfo}>
-                    <Text style={styles.memberName}>{helper.name}</Text>
-                    <Text style={styles.memberMeta}>
+              <View key={helper.id} style={{ borderTopWidth: index > 0 ? 1 : 0, borderTopColor: colors.line, paddingVertical: 12, gap: 10 }}>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 12, rowGap: 8 }}>
+                  <Avatar name={helper.name} size={44} />
+                  <View style={{ flexGrow: 1, flexShrink: 1, flexBasis: 150, minWidth: 0 }}>
+                    <T w={700}>{helper.name}</T>
+                    <T s={0.84} c="muted" lh={1.35}>
                       {helper.role}
                       {"age" in helper ? ` · Age ${helper.age}` : ""}
-                      {" · Invitation sent · Approval requested"}
-                    </Text>
-                    <Text style={styles.contact}>{getContactDetail(helper)}</Text>
+                      {` · ${getContactDetail(helper)}`}
+                    </T>
                   </View>
                   <StatusPill label="Pending" tone="warning" />
                 </View>
-                <Text style={styles.parentNote}>
-                  A parent must approve this helper before pickup.
-                </Text>
-                <View style={styles.actions}>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Approve ${helper.name}`}
-                    onPress={() => approve(helper)}
-                    style={({ pressed }) => [styles.approveButton, pressed && styles.pressed]}
-                  >
-                    <Text style={styles.approveText}>Approve</Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Reject ${helper.name}`}
-                    onPress={() => reject(helper)}
-                    style={({ pressed }) => [styles.rejectButton, pressed && styles.pressed]}
-                  >
-                    <Text style={styles.rejectText}>Reject</Text>
-                  </Pressable>
+                <View style={{ flexDirection: "row", gap: 10 }}>
+                  <Btn kind="p" sm flex label={`Approve ${helper.name}`} onPress={() => approve(helper)}>Approve</Btn>
+                  <Btn kind="o" sm color={colors.danger} label={`Reject ${helper.name}`} onPress={() => reject(helper)}>Reject</Btn>
                 </View>
               </View>
             ))}
@@ -347,150 +250,172 @@ export function TrustedCircle() {
         </>
       ) : null}
 
+      <SectionHeading title="Approved to collect" />
+      <Card tight>
+        {approvedHelpers.length ? (
+          <>
+            {primaryHelpers.length > 0 ? (
+              <>
+                <GroupHeading>Emergency contacts</GroupHeading>
+                {primaryHelpers.map((helper, index) => renderMember(helper, index, "helper"))}
+              </>
+            ) : null}
+            {regularHelpers.length > 0 ? (
+              <>
+                <GroupHeading>Helpers</GroupHeading>
+                {regularHelpers.map((helper, index) => renderMember(helper, index, "helper"))}
+              </>
+            ) : null}
+          </>
+        )
+          : <View style={{ paddingVertical: 16 }}><T s={0.92} c="muted">No approved helpers yet.</T></View>}
+      </Card>
       <SecondaryButton
         label="+ Add New Helper"
         onPress={() => setIsAddModalVisible(true)}
       />
-      <Text style={styles.footerNote}>
-      Helper records and approval decisions use local demo state only. Invitations are simulated; no database or notifications are connected.
-      </Text>
 
-      <Modal
-        visible={isAddModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={closeAddModal}
-      >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-          style={styles.modalRoot}
-        >
-          <View style={styles.modalBackdrop}>
-            <View style={styles.modalCard}>
-              <View style={styles.modalHeader}>
-                <Text accessibilityRole="header" style={styles.modalTitle}>Invite a helper</Text>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Close add helper dialog"
-                  onPress={closeAddModal}
-                  hitSlop={8}
-                >
-                  <Text style={styles.closeText}>Close</Text>
-                </Pressable>
-              </View>
-              <Text style={styles.modalDescription}>
-                Enter their details to create a simulated invitation. They will appear as pending until approved.
-              </Text>
-              <TextInput
-                accessibilityLabel="Helper name"
-                autoCapitalize="words"
-                onChangeText={setNewHelperName}
-                placeholder="Name"
-                placeholderTextColor={theme.colors.muted}
-                returnKeyType="next"
-                style={styles.input}
-                value={newHelperName}
-              />
-              <TextInput
-                accessibilityLabel="Helper age"
-                keyboardType="number-pad"
-                onChangeText={(value) => setNewHelperAge(value.replace(/[^0-9]/g, ""))}
-                placeholder="Age"
-                placeholderTextColor={theme.colors.muted}
-                returnKeyType="next"
-                style={styles.input}
-                value={newHelperAge}
-              />
-              <TextInput
-                accessibilityLabel="Helper relationship to the child"
-                autoCapitalize="words"
-                onChangeText={setNewHelperRole}
-                placeholder="Relationship to the child"
-                placeholderTextColor={theme.colors.muted}
-                returnKeyType="next"
-                style={styles.input}
-                value={newHelperRole}
-              />
-              <TextInput
-                accessibilityLabel="Helper phone number"
-                keyboardType="phone-pad"
-                onChangeText={setNewHelperPhone}
-                placeholder="Phone number (optional)"
-                placeholderTextColor={theme.colors.muted}
-                returnKeyType="done"
-                style={styles.input}
-                value={newHelperPhone}
-              />
-              {formError ? <Text accessibilityLiveRegion="polite" style={styles.formError}>{formError}</Text> : null}
-              <PrimaryButton
-                label="Send demo invitation"
-                onPress={addHelper}
-                disabled={
-                  !newHelperName.trim()
-                  || !newHelperAge.trim()
-                  || !Number.isInteger(Number(newHelperAge))
-                  || !newHelperRole.trim()
-                }
-              />
-              <Text style={styles.modalFootnote}>Demo only · This does not send a real invitation.</Text>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-      <Modal
-        visible={timePickerPurpose !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setTimePickerPurpose(null)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text accessibilityRole="header" style={styles.modalTitle}>
-                {timePickerPurpose === "backup" ? "Backup pickup time" : "Your pickup availability"}
-              </Text>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Close time picker"
-                onPress={() => setTimePickerPurpose(null)}
-                hitSlop={8}
-              >
-                <Text style={styles.closeText}>Close</Text>
-              </Pressable>
-            </View>
-            <Text style={styles.modalDescription}>
-              {timePickerPurpose === "backup"
-                ? "Choose when the backup pickup is needed."
-                : "Choose when your availability ends."}
-            </Text>
-            <TimeWheelPicker value={selectedTime} onChange={setSelectedTime} theme={theme} />
-            <PrimaryButton
-              label={timePickerPurpose === "backup" ? "Send request to available helpers" : "Save my availability"}
-              onPress={saveSelectedTime}
+      <SectionHeading title="Backup pickup" />
+      <Card style={{ gap: 10 }}>
+        <T s={1.05} w={700}>{backupPickupRequest ? "Backup request" : "Need someone else to collect?"}</T>
+        {!backupPickupRequest ? <T c="muted" lh={1.4}>Ask all available helpers at once.</T> : null}
+        {backupPickupRequest ? (
+          <Rise key={backupPickupRequest.state} kind="swap" style={{ backgroundColor: backupPickupRequest.state === "approved" ? colors.successSoft : colors.primarySoft, borderRadius: 14, padding: 12, gap: 8 }}>
+            <StatusPill
+              label={backupPickupRequest.state === "approved" ? "Accepted" : "Waiting"}
+              tone={backupPickupRequest.state === "approved" ? "success" : "warning"}
             />
-            <Text style={styles.modalFootnote}>Demo only · No real notification is sent.</Text>
-          </View>
-        </View>
-      </Modal>
-      <Modal
-        visible={approvalNoticeVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setApprovalNoticeVisible(false)}
+            <T s={0.9} c={colors.primaryInk} lh={1.4}>
+              {backupPickupRequest.state === "approved"
+                ? `${backupPickupRequest.approvedBy ?? "A helper"} will collect at ${backupPickupRequest.pickupTime}.`
+                : `Asked ${backupPickupRequest.recipientIds.length} helper${backupPickupRequest.recipientIds.length === 1 ? "" : "s"} for ${backupPickupRequest.pickupTime}.`}
+            </T>
+            {backupPickupRequest.state === "pending" && backupPickupRequest.recipientIds.length > 0 ? (
+              <>
+                <T s={0.85} w={700} c="muted">Simulate a helper's answer:</T>
+                {approvedHelpers
+                  .filter((helper) => backupPickupRequest.recipientIds.includes(helper.id))
+                  .map((helper) => (
+                    <Btn
+                      key={helper.id}
+                      kind="dash"
+                      label={`Simulate ${helper.name} approving the pickup request`}
+                      onPress={() => simulateHelperApproval(helper)}
+                    >
+                      {`Simulate ${helper.name} Approval`}
+                    </Btn>
+                  ))}
+              </>
+            ) : null}
+          </Rise>
+        ) : null}
+        <PrimaryButton
+          label={backupPickupRequest?.state === "pending" ? "Send another backup request" : "Request backup pickup"}
+          onPress={() => openTimePicker("backup")}
+          disabled={availableHelpers.length === 0}
+        />
+        {availableHelpers.length === 0 ? (
+          <T s={0.85} c="muted" align="center">No approved helpers are currently available.</T>
+        ) : null}
+      </Card>
+
+      <SectionHeading title="Family" />
+      <Card tight>
+        {familyMembers.map((member, index) => renderMember(
+          member,
+          index,
+          "family",
+        ))}
+      </Card>
+      <T s={0.78} lh={1.4} c="muted" align="center">Simulated demo. Contacts and availability are sample data.</T>
+
+      <Sheet visible={isAddModalVisible} onClose={closeAddModal} title="Invite a helper" closeLabel="Close add helper dialog">
+        <T c="muted" lh={1.4}>
+          Enter their details to create a simulated invitation. They will appear as pending until approved.
+        </T>
+        <Field label="Name">
+          <Input
+            accessibilityLabel="Helper name"
+            autoCapitalize="words"
+            onChangeText={setNewHelperName}
+            returnKeyType="next"
+            value={newHelperName}
+          />
+        </Field>
+        <Field label="Age">
+          <Input
+            accessibilityLabel="Helper age"
+            keyboardType="number-pad"
+            onChangeText={(value) => setNewHelperAge(value.replace(/[^0-9]/g, ""))}
+            returnKeyType="next"
+            value={newHelperAge}
+          />
+        </Field>
+        <Field label="Relationship to the child">
+          <Input
+            accessibilityLabel="Helper relationship to the child"
+            autoCapitalize="words"
+            onChangeText={setNewHelperRole}
+            returnKeyType="next"
+            value={newHelperRole}
+          />
+        </Field>
+        <Field label="Phone number (optional)">
+          <Input
+            accessibilityLabel="Helper phone number"
+            keyboardType="phone-pad"
+            onChangeText={setNewHelperPhone}
+            returnKeyType="done"
+            value={newHelperPhone}
+          />
+        </Field>
+        <Err text={formError} />
+        <PrimaryButton
+          label="Send demo invitation"
+          onPress={addHelper}
+          disabled={
+            !newHelperName.trim()
+            || !newHelperAge.trim()
+            || !Number.isInteger(Number(newHelperAge))
+            || !newHelperRole.trim()
+          }
+        />
+        <T s={0.85} c="muted" align="center">Demo only · This does not send a real invitation.</T>
+      </Sheet>
+
+      <Sheet
+        visible={timePickerPurpose !== null}
+        onClose={() => setTimePickerPurpose(null)}
+        title={timePickerPurpose === "backup" ? "Backup pickup time" : "Your pickup availability"}
+        closeLabel="Close time picker"
+        footer={
+        <PrimaryButton
+          label={timePickerPurpose === "backup" ? "Send request to available helpers" : "Save my availability"}
+          onPress={saveSelectedTime}
+        />
+        }
       >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <StatusPill label="Pickup confirmed" tone="success" />
-            <Text accessibilityRole="header" style={styles.confirmationTitle}>
-              {backupPickupRequest?.approvedBy ?? "Your helper"} will pick up {mockData.child.name} today!
-            </Text>
-            <Text style={styles.modalDescription}>
-              This confirmation is simulated for the demo.
-            </Text>
-            <PrimaryButton label="Done" onPress={() => setApprovalNoticeVisible(false)} />
+        <T c="muted" lh={1.4}>
+          {timePickerPurpose === "backup"
+            ? "Choose when the backup pickup is needed."
+            : "Choose when your availability ends."}
+        </T>
+        <TimeWheelPicker value={selectedTime} onChange={setSelectedTime} />
+        <T s={0.85} c="muted" align="center">Demo only · No real notification is sent.</T>
+      </Sheet>
+
+      <Sheet visible={approvalNoticeVisible} onClose={() => setApprovalNoticeVisible(false)} title="Pickup confirmed">
+        <View style={{ alignItems: "center", gap: 14, paddingTop: 10, paddingBottom: 6 }}>
+          <View style={{ width: 96, height: 96, borderRadius: 48, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center" }}>
+            <Icon name="check" size={46} color={colors.onPrimary} stroke={1.8} />
           </View>
+          <T s={1.15} w={800} ls={-0.01} lh={1.3} align="center">
+            {backupPickupRequest?.approvedBy ?? "Your helper"} will pick up {mockData.child.name} today!
+          </T>
+          <T c="muted" align="center">This confirmation is simulated for the demo.</T>
         </View>
-      </Modal>
+        <PrimaryButton label="Done" onPress={() => setApprovalNoticeVisible(false)} />
+      </Sheet>
     </AppShell>
   );
 
@@ -505,573 +430,102 @@ export function TrustedCircle() {
     const isAccountOwner = member.id === accountOwner.id;
     const memberAvailability = availability[member.id] ?? false;
     const availabilityTime = availabilityTimes[member.id];
+    const open = openIds[member.id] ?? false;
+    const summary = memberAvailability ? `Available until ${availabilityTime ?? "2:00 PM"}` : "Busy";
 
     return (
-      <View key={member.id}>
-        {index > 0 ? <View style={styles.separator} /> : null}
-        <View style={styles.memberRow}>
-          <Avatar name={member.name} size={46} />
-          <View style={styles.memberInfo}>
-            <View style={styles.nameLine}>
-              <Text style={styles.memberName}>{member.name}</Text>
-              {isPrimaryContact ? <Text style={styles.primaryTag}>★ PRIMARY EMERGENCY CONTACT</Text> : null}
-              {isCollector ? <Text style={styles.collectorTag}>TODAY'S PICKUP</Text> : null}
+      <View key={member.id} style={{ borderTopWidth: index > 0 ? 1 : 0, borderTopColor: colors.line }}>
+        <Press
+          onPress={() => setOpenIds((current) => ({ ...current, [member.id]: !open }))}
+          label={`${member.name}, ${member.role}. ${summary}. ${open ? "Hide" : "Show"} details`}
+          state={{ selected: open }}
+          scaleTo={0.985}
+          style={{ flexDirection: "row", alignItems: "center", gap: 12, minHeight: 64, paddingVertical: 10 }}
+        >
+          <Avatar name={member.name} size={44} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", columnGap: 6 }}>
+              <T w={700}>{member.name}</T>
+              {isCollector ? <Tag>TODAY'S PICKUP</Tag> : null}
             </View>
-            <Text style={styles.memberMeta}>
+            <T s={0.84} c="muted" lh={1.35}>
               {member.role}{age === undefined ? "" : ` · Age ${age}`}
-            </Text>
-            <Text style={styles.contact}>{getContactDetail(member)}</Text>
-            <Text style={styles.location}>{member.locationLabel ?? "Location not shared"}</Text>
+            </T>
+            <T s={0.84} w={600} c={memberAvailability ? colors.success : colors.muted} lh={1.35}>{summary}</T>
           </View>
-        </View>
-        <View style={styles.memberFooter}>
-          <StatusPill label={kind === "helper" ? "Approved helper" : "Family"} tone="success" />
-          {isAccountOwner ? (
-            <>
-              <Pressable
-                accessibilityRole="switch"
-                accessibilityLabel="My pickup availability"
-                accessibilityHint="Toggle your own availability for pickup."
-                accessibilityState={{ checked: memberAvailability }}
-                onPress={toggleOwnerAvailability}
-                style={({ pressed }) => [
-                  styles.availabilityButton,
-                  memberAvailability ? styles.availableButton : styles.unavailableButton,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Text style={[styles.availabilityText, memberAvailability && styles.availableText]}>
-                  {memberAvailability ? "Available" : "Busy"}
-                </Text>
-              </Pressable>
-              {memberAvailability ? (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`Set my pickup availability until ${availabilityTime ?? "3:00 PM"}`}
-                  onPress={() => openTimePicker("availability")}
-                  style={({ pressed }) => [styles.availabilityButton, styles.availableButton, pressed && styles.pressed]}
-                >
-                  <Text style={[styles.availabilityText, styles.availableText]}>
-                    Until {availabilityTime ?? "3:00 PM"} · Set
-                  </Text>
-                </Pressable>
-              ) : null}
-            </>
-          ) : (
-            <View accessibilityLabel={`${member.name} availability is read only`} style={styles.readOnlyAvailability}>
-              <Text style={styles.lockIcon}>🔒</Text>
-              <Text style={[styles.availabilityText, memberAvailability && styles.availableText]}>
-                {memberAvailability
-                  ? `Available · Until ${availabilityTime ?? "2:00 PM"}`
-                  : "Busy · Not available"}
-              </Text>
+          <View style={{ transform: [{ rotate: open ? "90deg" : "0deg" }] }}>
+            <Icon name="chev" size={18} color={colors.muted} stroke={2} />
+          </View>
+        </Press>
+        {open ? (
+          <Rise kind="swap" style={{ paddingBottom: 12, gap: 10 }}>
+            <View style={{ gap: 2 }}>
+              <T s={0.88} lh={1.4}>{getContactDetail(member)}</T>
+              <T s={0.88} c={colors.primaryInk} lh={1.4}>{member.locationLabel ?? "Location not shared"}</T>
+              {isPrimaryContact ? <View style={{ marginTop: 4, flexDirection: "row" }}><Tag kind="gold" icon="star">PRIMARY EMERGENCY CONTACT</Tag></View> : null}
             </View>
-          )}
-          <Pressable
-            accessibilityRole="switch"
-            accessibilityLabel={`${member.name} primary emergency contact`}
-            accessibilityHint="Toggle this person as a primary emergency contact."
-            accessibilityState={{ checked: isPrimaryContact }}
-            onPress={() => togglePrimaryContact(member.id)}
-            style={({ pressed }) => [
-              styles.primaryToggle,
-              isPrimaryContact && styles.primaryToggleActive,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Text style={[styles.primaryToggleText, isPrimaryContact && styles.primaryToggleActiveText]}>
-              {isPrimaryContact ? "★ Primary" : "☆ Set primary"}
-            </Text>
-          </Pressable>
-          {kind === "helper" ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Remove ${member.name} from trusted circle`}
-              onPress={() => removeHelper(member)}
-              style={({ pressed }) => [styles.removeButton, pressed && styles.pressed]}
-            >
-              <Text style={styles.removeText}>Remove</Text>
-            </Pressable>
-          ) : null}
-        </View>
+            <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              {isAccountOwner ? (
+                <>
+                  <SmallBtn
+                    role="switch"
+                    checked={memberAvailability}
+                    tone={memberAvailability ? "on" : "off"}
+                    label="My pickup availability"
+                    hint="Toggle your own availability for pickup."
+                    onPress={toggleOwnerAvailability}
+                  >
+                    {memberAvailability ? "Available" : "Busy"}
+                  </SmallBtn>
+                  {memberAvailability ? (
+                    <SmallBtn
+                      tone="on"
+                      label={`Set my pickup availability until ${availabilityTime ?? "3:00 PM"}`}
+                      onPress={() => openTimePicker("availability")}
+                    >
+                      {`Until ${availabilityTime ?? "3:00 PM"} · Change`}
+                    </SmallBtn>
+                  ) : null}
+                </>
+              ) : (
+                <View accessible accessibilityLabel={`${member.name} availability is read only`}>
+                  <Chip kind={memberAvailability ? "ok" : "plain"} icon="lock">
+                    Only {member.name} can change availability
+                  </Chip>
+                </View>
+              )}
+              <SmallBtn
+                role="switch"
+                checked={isPrimaryContact}
+                tone={isPrimaryContact ? "gold" : "off"}
+                icon="star"
+                label={`${member.name} primary emergency contact`}
+                hint="Toggle this person as a primary emergency contact."
+                onPress={() => togglePrimaryContact(member.id)}
+              >
+                {isPrimaryContact ? "Primary contact" : "Make primary contact"}
+              </SmallBtn>
+              {kind === "helper" ? (
+                <SmallBtn
+                  tone="danger"
+                  label={`Remove ${member.name} from trusted circle`}
+                  onPress={() => removeHelper(member)}
+                >
+                  Remove
+                </SmallBtn>
+              ) : null}
+            </View>
+          </Rise>
+        ) : null}
       </View>
     );
   }
 }
 
-const makeStyles = (theme: ThemeTokens) => StyleSheet.create({
-  lead: {
-    color: theme.colors.muted,
-    fontSize: theme.type.body * theme.textScale,
-    lineHeight: 21 * theme.textScale,
-    marginTop: theme.spacing.sm,
-    marginBottom: theme.spacing.md,
-  },
-  demoNotice: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-    backgroundColor: theme.colors.primarySoft,
-    borderRadius: theme.radius.control,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: theme.spacing.sm,
-    marginBottom: theme.spacing.md,
-  },
-  demoDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.primary },
-  demoText: {
-    flex: 1,
-    color: theme.colors.primaryInk,
-    fontSize: theme.type.small * theme.textScale,
-    fontWeight: "600",
-  },
-  actionNotice: {
-    color: theme.colors.success,
-    fontSize: theme.type.small * theme.textScale,
-    fontWeight: "700",
-    marginBottom: theme.spacing.sm,
-  },
-  listCard: {
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.xs,
-    marginTop: theme.spacing.sm,
-    marginBottom: theme.spacing.md,
-  },
-  groupHeading: {
-    color: theme.colors.primaryInk,
-    fontSize: theme.type.small * theme.textScale,
-    fontWeight: "800",
-    letterSpacing: 0.4,
-    marginTop: theme.spacing.sm,
-    marginBottom: theme.spacing.xs,
-  },
-  requestCard: { marginTop: theme.spacing.xs, marginBottom: theme.spacing.md, gap: theme.spacing.sm },
-  requestHeading: {
-    color: theme.colors.ink,
-    fontSize: theme.type.body * theme.textScale,
-    fontWeight: "800",
-  },
-  broadcastNotice: {
-    backgroundColor: theme.colors.primarySoft,
-    borderRadius: theme.radius.control,
-    padding: theme.spacing.sm,
-    gap: theme.spacing.xs,
-  },
-  broadcastText: {
-    color: theme.colors.primaryInk,
-    fontSize: theme.type.small * theme.textScale,
-    lineHeight: 17 * theme.textScale,
-  },
-  demoActionLabel: {
-    color: theme.colors.muted,
-    fontSize: theme.type.small * theme.textScale,
-    fontWeight: "700",
-    marginTop: theme.spacing.xs,
-  },
-  simulateButton: {
-    minHeight: 40,
-    borderRadius: theme.radius.control,
-    borderWidth: 1,
-    borderColor: theme.colors.primary,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: theme.spacing.sm,
-    backgroundColor: theme.colors.card,
-  },
-  simulateButtonText: {
-    color: theme.colors.primaryInk,
-    fontSize: theme.type.small * theme.textScale,
-    fontWeight: "700",
-  },
-  memberRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing.sm,
-    paddingVertical: theme.spacing.sm,
-  },
-  memberInfo: { flex: 1, minWidth: 0 },
-  nameLine: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 },
-  memberName: {
-    color: theme.colors.ink,
-    fontSize: theme.type.body * theme.textScale,
-    fontWeight: "800",
-  },
-  primaryTag: {
-    color: theme.colors.warningInk,
-    backgroundColor: theme.colors.warning,
-    borderRadius: 8,
-    paddingHorizontal: 5,
-    paddingVertical: 3,
-    fontSize: 8 * theme.textScale,
-    fontWeight: "800",
-    letterSpacing: 0.3,
-  },
-  collectorTag: {
-    color: theme.colors.primaryInk,
-    backgroundColor: theme.colors.primarySoft,
-    borderRadius: 8,
-    paddingHorizontal: 5,
-    paddingVertical: 3,
-    fontSize: 8 * theme.textScale,
-    fontWeight: "800",
-    letterSpacing: 0.3,
-  },
-  memberMeta: {
-    color: theme.colors.muted,
-    fontSize: theme.type.small * theme.textScale,
-    marginTop: 3,
-  },
-  contact: {
-    color: theme.colors.ink,
-    fontSize: theme.type.small * theme.textScale,
-    marginTop: 3,
-  },
-  location: {
-    color: theme.colors.primaryInk,
-    fontSize: theme.type.small * theme.textScale,
-    marginTop: 3,
-  },
-  memberFooter: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    flexWrap: "wrap",
-    gap: theme.spacing.xs,
-    paddingBottom: theme.spacing.sm,
-  },
-  availabilityButton: {
-    minHeight: 36,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.pill,
-    paddingHorizontal: theme.spacing.sm,
-    borderWidth: 1,
-  },
-  availableButton: { backgroundColor: theme.colors.successSoft, borderColor: theme.colors.successSoft },
-  unavailableButton: { backgroundColor: theme.colors.card, borderColor: theme.colors.line },
-  availabilityText: {
-    color: theme.colors.muted,
-    fontSize: theme.type.small * theme.textScale,
-    fontWeight: "700",
-  },
-  availableText: { color: theme.colors.success },
-  readOnlyAvailability: {
-    minHeight: 36,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing.xxs,
-    borderRadius: theme.radius.pill,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-    paddingHorizontal: theme.spacing.sm,
-    backgroundColor: theme.colors.background,
-  },
-  lockIcon: { fontSize: theme.type.small * theme.textScale },
-  primaryToggle: {
-    minHeight: 36,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.pill,
-    paddingHorizontal: theme.spacing.sm,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-  },
-  primaryToggleActive: {
-    backgroundColor: theme.colors.warning,
-    borderColor: theme.colors.warning,
-  },
-  primaryToggleText: {
-    color: theme.colors.muted,
-    fontSize: theme.type.small * theme.textScale,
-    fontWeight: "700",
-  },
-  primaryToggleActiveText: { color: theme.colors.warningInk },
-  separator: { height: 1, backgroundColor: theme.colors.line },
-  empty: {
-    color: theme.colors.muted,
-    fontSize: theme.type.body * theme.textScale,
-    paddingVertical: theme.spacing.md,
-  },
-  parentNote: {
-    color: theme.colors.warningInk,
-    backgroundColor: theme.colors.warning,
-    borderRadius: 12,
-    padding: theme.spacing.sm,
-    fontSize: theme.type.small * theme.textScale,
-    lineHeight: 16 * theme.textScale,
-    marginBottom: theme.spacing.sm,
-  },
-  actions: { flexDirection: "row", gap: theme.spacing.sm, marginBottom: theme.spacing.sm },
-  approveButton: {
-    flex: 1,
-    minHeight: 44,
-    backgroundColor: theme.colors.primary,
-    borderRadius: theme.radius.control,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  approveText: {
-    color: theme.colors.onPrimary,
-    fontSize: theme.type.small * theme.textScale,
-    fontWeight: "800",
-  },
-  rejectButton: {
-    minWidth: 92,
-    minHeight: 44,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-    borderRadius: theme.radius.control,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: theme.colors.card,
-  },
-  rejectText: {
-    color: theme.colors.danger,
-    fontSize: theme.type.small * theme.textScale,
-    fontWeight: "800",
-  },
-  removeButton: {
-    minHeight: 36,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.pill,
-    paddingHorizontal: theme.spacing.sm,
-    borderWidth: 1,
-    borderColor: theme.colors.danger,
-    backgroundColor: theme.colors.dangerSoft,
-  },
-  removeText: {
-    color: theme.colors.danger,
-    fontSize: theme.type.small * theme.textScale,
-    fontWeight: "700",
-  },
-  pressed: { opacity: 0.78 },
-  footerNote: {
-    color: theme.colors.muted,
-    fontSize: theme.type.small * theme.textScale,
-    textAlign: "center",
-    lineHeight: 16 * theme.textScale,
-    marginTop: theme.spacing.md,
-    marginBottom: theme.spacing.md,
-  },
-  modalRoot: { flex: 1 },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.48)",
-    justifyContent: "center",
-    padding: theme.spacing.lg,
-  },
-  modalCard: {
-    backgroundColor: theme.colors.card,
-    borderColor: theme.colors.line,
-    borderWidth: 1,
-    borderRadius: theme.radius.card,
-    padding: theme.spacing.lg,
-    gap: theme.spacing.sm,
-  },
-  modalHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: theme.spacing.sm,
-  },
-  modalTitle: {
-    color: theme.colors.ink,
-    fontSize: theme.type.body * theme.textScale * 1.2,
-    fontWeight: "800",
-  },
-  closeText: {
-    color: theme.colors.primaryInk,
-    fontSize: theme.type.small * theme.textScale,
-    fontWeight: "700",
-  },
-  modalDescription: {
-    color: theme.colors.muted,
-    fontSize: theme.type.small * theme.textScale,
-    lineHeight: 17 * theme.textScale,
-    marginBottom: theme.spacing.xs,
-  },
-  input: {
-    minHeight: 48,
-    borderColor: theme.colors.line,
-    borderWidth: 1,
-    borderRadius: theme.radius.control,
-    color: theme.colors.ink,
-    backgroundColor: theme.colors.background,
-    paddingHorizontal: theme.spacing.md,
-    fontSize: theme.type.body * theme.textScale,
-  },
-  formError: {
-    color: theme.colors.danger,
-    fontSize: theme.type.small * theme.textScale,
-    lineHeight: 16 * theme.textScale,
-  },
-  modalFootnote: {
-    color: theme.colors.muted,
-    fontSize: theme.type.small * theme.textScale,
-    textAlign: "center",
-  },
-  confirmationTitle: {
-    color: theme.colors.ink,
-    fontSize: theme.type.body * theme.textScale * 1.2,
-    fontWeight: "800",
-    lineHeight: 26 * theme.textScale,
-    marginVertical: theme.spacing.sm,
-  },
-});
-
-type TimeWheelPickerProps = {
-  value: string;
-  onChange: (value: string) => void;
-  theme: ThemeTokens;
-};
-
-type WheelColumnProps = {
-  label: string;
-  items: string[];
-  selectedIndex: number;
-  onSelect: (index: number) => void;
-  theme: ThemeTokens;
-};
-
-function TimeWheelPicker({ value, onChange, theme }: TimeWheelPickerProps) {
-  const styles = makeWheelStyles(theme);
-  const [time, period = "PM"] = value.split(" ");
-  const [hourText = "2", minuteText = "30"] = time.split(":");
-  const hour = Number(hourText);
-  const minute = Number(minuteText);
-  const hours = Array.from({ length: 12 }, (_, index) => String(index + 1).padStart(2, "0"));
-  const minutes = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0"));
-  const periods = ["AM", "PM"];
-
-  const updateTime = (nextHour: number, nextMinute: number, nextPeriod: string) => {
-    onChange(`${nextHour}:${String(nextMinute).padStart(2, "0")} ${nextPeriod}`);
-  };
-
+function GroupHeading({ children }: { children: string }) {
   return (
-    <View style={styles.picker}>
-      <WheelColumn
-        label="Hour"
-        items={hours}
-        selectedIndex={Math.max(0, Math.min(hours.length - 1, ((hour || 12) + 11) % 12))}
-        onSelect={(index) => updateTime(index === 11 ? 12 : index + 1, minute, period)}
-        theme={theme}
-      />
-      <Text style={styles.colon}>:</Text>
-      <WheelColumn
-        label="Minute"
-        items={minutes}
-        selectedIndex={Math.max(0, Math.min(minutes.length - 1, minute))}
-        onSelect={(index) => updateTime(hour || 12, index, period)}
-        theme={theme}
-      />
-      <WheelColumn
-        label="Period"
-        items={periods}
-        selectedIndex={period === "AM" ? 0 : 1}
-        onSelect={(index) => updateTime(hour || 12, minute, periods[index])}
-        theme={theme}
-      />
+    <View style={{ marginTop: 12, marginBottom: 2 }}>
+      <T s={0.78} w={800} ls={0.04} up c={useColors().primaryInk}>{children}</T>
     </View>
   );
 }
-
-function WheelColumn({ label, items, selectedIndex, onSelect, theme }: WheelColumnProps) {
-  const styles = makeWheelStyles(theme);
-  const scrollRef = useRef<ScrollView | null>(null);
-  const scrollToSelected = useCallback(() => {
-    scrollRef.current?.scrollTo({ y: selectedIndex * wheelItemHeight, animated: false });
-  }, [selectedIndex]);
-
-  useEffect(() => {
-    scrollToSelected();
-  }, [scrollToSelected]);
-
-  return (
-    <View style={styles.column}>
-      <Text style={styles.columnLabel}>{label}</Text>
-      <View style={styles.wheelViewport}>
-        <ScrollView
-          ref={scrollRef}
-          bounces={false}
-          decelerationRate="fast"
-          onLayout={scrollToSelected}
-          onMomentumScrollEnd={(event) => {
-            const index = Math.round(event.nativeEvent.contentOffset.y / wheelItemHeight);
-            onSelect(Math.max(0, Math.min(items.length - 1, index)));
-          }}
-          showsVerticalScrollIndicator={false}
-          snapToInterval={wheelItemHeight}
-          contentContainerStyle={styles.wheelContent}
-        >
-          {items.map((item, index) => (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityState={{ selected: index === selectedIndex }}
-              key={item}
-              onPress={() => onSelect(index)}
-              style={styles.wheelItem}
-            >
-              <Text style={[styles.wheelItemText, index === selectedIndex && styles.wheelItemSelected]}>
-                {item}
-              </Text>
-            </Pressable>
-          ))}
-        </ScrollView>
-        <View pointerEvents="none" style={styles.selectedIndicator} />
-      </View>
-    </View>
-  );
-}
-
-const makeWheelStyles = (theme: ThemeTokens) => StyleSheet.create({
-  picker: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "center",
-    gap: theme.spacing.xs,
-    paddingVertical: theme.spacing.sm,
-  },
-  column: { flex: 1, minWidth: 0, alignItems: "center" },
-  columnLabel: {
-    color: theme.colors.muted,
-    fontSize: theme.type.small * theme.textScale,
-    fontWeight: "700",
-    marginBottom: theme.spacing.xs,
-  },
-  wheelViewport: {
-    width: "100%",
-    height: wheelItemHeight * 3,
-    overflow: "hidden",
-    position: "relative",
-  },
-  wheelContent: { paddingVertical: wheelItemHeight },
-  wheelItem: {
-    height: wheelItemHeight,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  wheelItemText: {
-    color: theme.colors.muted,
-    fontSize: theme.type.body * theme.textScale,
-    fontWeight: "600",
-  },
-  wheelItemSelected: { color: theme.colors.primaryInk, fontWeight: "800" },
-  selectedIndicator: {
-    position: "absolute",
-    top: wheelItemHeight,
-    left: 0,
-    right: 0,
-    height: wheelItemHeight,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: theme.colors.line,
-    backgroundColor: theme.colors.primarySoft,
-    opacity: 0.5,
-  },
-  colon: {
-    color: theme.colors.ink,
-    fontSize: theme.type.body * theme.textScale,
-    fontWeight: "800",
-    paddingBottom: wheelItemHeight * 1.3,
-  },
-});
