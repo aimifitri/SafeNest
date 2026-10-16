@@ -47,18 +47,33 @@ export function TrustedCircle() {
 
   const approvedHelpers = [
     ...trustedHelpers.filter((helper) => helper.state === "active"),
-    ...localHelpers,
+    ...localHelpers.filter((helper) => helper.state === "active"),
   ];
-  const pendingHelpers = trustedHelpers.filter((helper) => helper.state === "pending");
+  const pendingHelpers = [
+    ...trustedHelpers.filter((helper) => helper.state === "pending"),
+    ...localHelpers.filter((helper) => helper.state === "pending"),
+  ];
   const familyMembers = mockData.familyMembers;
 
   const approve = (helper: TrustedHelper) => {
-    setTrustedHelperState(helper.id, "active");
+    if (localHelpers.some((item) => item.id === helper.id)) {
+      setLocalHelpers((current) => current.map((item) => (
+        item.id === helper.id ? { ...item, state: "active" } : item
+      )));
+    } else {
+      setTrustedHelperState(helper.id, "active");
+    }
     setNotice(`${helper.name} approved in this demo.`);
   };
 
   const reject = (helper: TrustedHelper) => {
-    setTrustedHelperState(helper.id, "rejected");
+    if (localHelpers.some((item) => item.id === helper.id)) {
+      setLocalHelpers((current) => current.map((item) => (
+        item.id === helper.id ? { ...item, state: "rejected" } : item
+      )));
+    } else {
+      setTrustedHelperState(helper.id, "rejected");
+    }
     setNotice(`${helper.name} request declined in this demo.`);
   };
 
@@ -103,12 +118,12 @@ export function TrustedCircle() {
     }
 
     const helperId = `local-helper-${Date.now()}`;
-    setLocalHelpers((current) => [...current, { id: helperId, name, age, role, state: "active" }]);
+    setLocalHelpers((current) => [...current, { id: helperId, name, age, role, state: "pending" }]);
     if (newHelperPhone.trim()) {
       setLocalHelperPhones((current) => ({ ...current, [helperId]: newHelperPhone.trim() }));
     }
     setAvailability((current) => ({ ...current, [helperId]: false }));
-    setNotice(`${name} added as an approved helper in this demo.`);
+    setNotice(`Demo invitation sent to ${name}. Waiting for approval.`);
     closeAddModal();
   };
 
@@ -163,7 +178,11 @@ export function TrustedCircle() {
                   <Avatar name={helper.name} size={46} />
                   <View style={styles.memberInfo}>
                     <Text style={styles.memberName}>{helper.name}</Text>
-                    <Text style={styles.memberMeta}>{helper.role} · Approval requested</Text>
+                    <Text style={styles.memberMeta}>
+                      {helper.role}
+                      {"age" in helper ? ` · Age ${helper.age}` : ""}
+                      {" · Invitation sent · Approval requested"}
+                    </Text>
                     <Text style={styles.contact}>{getContactDetail(helper)}</Text>
                   </View>
                   <StatusPill label="Pending" tone="warning" />
@@ -200,7 +219,7 @@ export function TrustedCircle() {
         onPress={() => setIsAddModalVisible(true)}
       />
       <Text style={styles.footerNote}>
-        Availability, added helpers, and removals are local demo data. No invitations or notifications are sent.
+      Helper records and approval decisions use local demo state only. Invitations are simulated; no database or notifications are connected.
       </Text>
 
       <Modal
@@ -216,7 +235,7 @@ export function TrustedCircle() {
           <View style={styles.modalBackdrop}>
             <View style={styles.modalCard}>
               <View style={styles.modalHeader}>
-                <Text accessibilityRole="header" style={styles.modalTitle}>Add a helper</Text>
+                <Text accessibilityRole="header" style={styles.modalTitle}>Invite a helper</Text>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Close add helper dialog"
@@ -227,7 +246,7 @@ export function TrustedCircle() {
                 </Pressable>
               </View>
               <Text style={styles.modalDescription}>
-                Add a trusted person to your demo circle. They will appear as approved locally.
+                Enter their details to create a simulated invitation. They will appear as pending until approved.
               </Text>
               <TextInput
                 accessibilityLabel="Helper name"
@@ -271,7 +290,7 @@ export function TrustedCircle() {
               />
               {formError ? <Text accessibilityLiveRegion="polite" style={styles.formError}>{formError}</Text> : null}
               <PrimaryButton
-                label="Add to demo circle"
+                label="Send demo invitation"
                 onPress={addHelper}
                 disabled={
                   !newHelperName.trim()
@@ -280,7 +299,7 @@ export function TrustedCircle() {
                   || !newHelperRole.trim()
                 }
               />
-              <Text style={styles.modalFootnote}>This does not send an invitation.</Text>
+              <Text style={styles.modalFootnote}>Demo only · This does not send a real invitation.</Text>
             </View>
           </View>
         </KeyboardAvoidingView>
