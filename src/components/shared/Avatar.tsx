@@ -1,21 +1,42 @@
-import { Image, StyleSheet, Text, View } from "react-native";
+import { Image, View } from "react-native";
 
 import { useAppContext } from "./AppContext";
-import type { ThemeTokens } from "./theme";
+import { T } from "./ui";
 
 type AvatarProps = { name: string; size?: number; imageUri?: string; color?: string };
 
-export function Avatar({ name, size = 44, imageUri, color }: AvatarProps) {
-  const { theme } = useAppContext();
-  const styles = makeStyles(theme, size, color);
-  const initials = name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("");
-  return <View accessible accessibilityRole="image" accessibilityLabel={`${name} avatar`} style={styles.avatar}>
-    {imageUri ? <Image source={{ uri: imageUri }} style={styles.image} /> : <Text style={styles.initials}>{initials}</Text>}
-  </View>;
+// Colours follow the prototype's per-person palette; people not in it get a stable colour from their name.
+const KNOWN: Record<string, number> = { abu: 0, laila: 0, ahmad: 1, aiman: 2, siti: 3, salmah: 4, ima: 5 };
+const TITLES = /^(encik|kak|pn\.?|puan|cik|cikgu|mr\.?|mrs\.?|ms\.?)\s+/i;
+
+function baseName(name: string): string {
+  return name.trim().replace(TITLES, "");
 }
 
-const makeStyles = (theme: ThemeTokens, size: number, color?: string) => StyleSheet.create({
-  avatar: { width: size, height: size, borderRadius: size / 2, backgroundColor: color ?? theme.colors.primarySoft, alignItems: "center", justifyContent: "center", overflow: "hidden" },
-  image: { width: size, height: size },
-  initials: { color: theme.colors.primaryInk, fontSize: Math.max(14, size * 0.38), fontWeight: "800" },
-});
+export function avatarIndex(name: string): number {
+  const base = baseName(name).toLowerCase().split(/\s+/)[0] ?? "";
+  if (base in KNOWN) return KNOWN[base];
+  let h = 0;
+  for (let i = 0; i < base.length; i++) h = (h * 31 + base.charCodeAt(i)) >>> 0;
+  return h % 6;
+}
+
+export function Avatar({ name, size = 44, imageUri, color }: AvatarProps) {
+  const { theme } = useAppContext();
+  const bg = color ?? theme.colors.avatars[avatarIndex(name)];
+  const initial = (baseName(name)[0] ?? "?").toUpperCase();
+  return (
+    <View
+      accessible
+      accessibilityRole="image"
+      accessibilityLabel={`${name} avatar`}
+      style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: bg, alignItems: "center", justifyContent: "center", overflow: "hidden" }}
+    >
+      {imageUri ? (
+        <Image source={{ uri: imageUri }} style={{ width: size, height: size }} />
+      ) : (
+        <T s={(size * 0.4) / 16 / theme.textScale} w={800} c="#FFFFFF" lh={1.1}>{initial}</T>
+      )}
+    </View>
+  );
+}

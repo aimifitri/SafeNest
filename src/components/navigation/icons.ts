@@ -33,6 +33,8 @@ export const IC: Record<string, string> = {
   mail: "<rect x=\"3\" y=\"5\" width=\"18\" height=\"14\" rx=\"2.5\"/><path d=\"M3.5 7l8.5 6 8.5-6\"/>",
   cantx: "<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M15 9l-6 6M9 9l6 6\"/>",
   hand: "<path d=\"M12 21c-4 0-7-3-7-7V9m7 12c4 0 7-3 7-7V8a1.5 1.5 0 0 0-3 0v3m-4-4V6a1.5 1.5 0 0 0-3 0v5\"/>",
+  star: "<path d=\"M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 16.9 6.8 19.7l1-5.9L3.5 9.7l5.9-.8z\"/>",
+  school: "<path d=\"M5 18V9.5l7-5 7 5V18zM10 18v-5h4v5\"/>",
   sliders: "<path d=\"M4 7h10M18 7h2M4 17h2M10 17h10\"/><circle cx=\"16\" cy=\"7\" r=\"2\"/><circle cx=\"8\" cy=\"17\" r=\"2\"/>",
 };
 export type IconName = keyof typeof IC;

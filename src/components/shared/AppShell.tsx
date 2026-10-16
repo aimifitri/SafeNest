@@ -14,6 +14,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { useReducedMotion } from "react-native-reanimated";
 
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
@@ -23,6 +24,8 @@ import type { ReactNode } from "react";
 
 import { Icon } from "../navigation/Icon";
 import { useAppContext } from "./AppContext";
+import { useLocalPendingCount } from "./pendingBadge";
+import { T } from "./ui";
 import type { ThemeTokens } from "./theme";
 
 // ==================================
@@ -37,7 +40,10 @@ type TabId =
 
 type AppShellProps = {
   title: string;
+  // Kept for API compatibility. The HTML design has no header badge, so it is only used as an accessibility hint.
   badge?: string;
+  // Optional full-bleed header (the Today map). When set, the page content sits in a rounded sheet below it.
+  header?: ReactNode;
   children: ReactNode;
   activeTab: TabId;
 };
@@ -100,12 +106,16 @@ function NavigationTab({
   color,
   onPress,
   textScale,
+  badge,
+  badgeColor,
 }: {
   tab: (typeof TABS)[number];
   active: boolean;
   color: string;
   onPress: () => void;
   textScale: number;
+  badge?: number;
+  badgeColor: string;
 }) {
   const [pressed, setPressed] =
     useState(false);
@@ -164,6 +174,26 @@ function NavigationTab({
           stroke={1.8}
         />
       </Animated.View>
+      {badge ? (
+        <View
+          accessibilityLabel={`${badge} waiting for approval`}
+          style={{
+            position: "absolute",
+            top: 2,
+            left: "50%",
+            marginLeft: 8,
+            minWidth: 18,
+            height: 18,
+            borderRadius: 9,
+            backgroundColor: badgeColor,
+            alignItems: "center",
+            justifyContent: "center",
+            paddingHorizontal: 5,
+          }}
+        >
+          <Text style={{ color: "#FFFFFF", fontSize: 11, fontWeight: "700", lineHeight: 14, includeFontPadding: false }}>{badge}</Text>
+        </View>
+      ) : null}
 
       <Text
         numberOfLines={1}
@@ -188,17 +218,23 @@ function NavigationTab({
 export function AppShell({
   title,
   badge,
+  header,
   children,
   activeTab,
 }: AppShellProps) {
-  const { theme } = useAppContext();
+  const { theme, trustedHelpers, selectedCaregiver } = useAppContext();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const reduce = useReducedMotion();
+  const localPending = useLocalPendingCount();
+  // Waiting-for-approval count on the Circle tab (parents only, like the prototype).
+  const pendingCount = selectedCaregiver?.isAdmin
+    ? trustedHelpers.filter((helper) => helper.state === "pending").length + localPending
+    : 0;
 
   const themed = makeStyles(
     theme,
-    insets.top,
-    insets.bottom
+    insets.top
   );
 
   const activeIndex = Math.max(
@@ -221,7 +257,7 @@ export function AppShell({
   ).current;
 
   const screenY = useRef(
-    new Animated.Value(10)
+    new Animated.Value(reduce ? 0 : 10)
   ).current;
 
   // ==================================
@@ -296,34 +332,35 @@ export function AppShell({
           ],
         }}
       >
-        <View style={themed.header}>
-          <Text
-            accessibilityRole="header"
-            style={themed.title}
-          >
-            {title}
-          </Text>
-
-          {badge ? (
-            <View style={themed.badge}>
-              <Text
-                style={themed.badgeText}
-              >
-                {badge}
-              </Text>
-            </View>
-          ) : null}
-        </View>
-
         <ScrollView
           style={{ flex: 1 }}
           contentContainerStyle={
-            themed.content
+            header ? themed.mapScroll : themed.pageScroll
           }
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {children}
+          {header ? (
+            <>
+              {header}
+              <View style={themed.sheet}>
+                <View style={themed.grab} />
+                {children}
+              </View>
+            </>
+          ) : (
+            <>
+              <View
+                accessibilityRole="header"
+                accessibilityHint={badge}
+              >
+                <T s={2} w={800} ls={-0.03} lh={1.1}>
+                  {title}
+                </T>
+              </View>
+              {children}
+            </>
+          )}
         </ScrollView>
       </Animated.View>
 
@@ -369,6 +406,8 @@ export function AppShell({
                       : theme.colors.muted
                   }
                   textScale={theme.textScale}
+                  badge={tab.key === "circle" ? pendingCount : 0}
+                  badgeColor={theme.colors.danger}
                   onPress={() => {
                     if (isActive) return;
 
@@ -487,8 +526,7 @@ const styles = StyleSheet.create({
 
 const makeStyles = (
   theme: ThemeTokens,
-  topInset: number,
-  bottomInset: number
+  topInset: number
 ) =>
   StyleSheet.create({
     screen: {
@@ -497,55 +535,39 @@ const makeStyles = (
         theme.colors.background,
     },
 
-    header: {
-      paddingTop: Math.max(
-        topInset,
-        theme.spacing.xl
-      ),
-      paddingHorizontal:
-        theme.spacing.lg,
-      paddingBottom:
-        theme.spacing.sm,
-      flexDirection: "row",
-      justifyContent:
-        "space-between",
-      alignItems: "center",
+    // `.page`: plain scrolling tab content with the standard 16px gutters.
+    pageScroll: {
+      flexGrow: 1,
+      gap: 16,
+      paddingTop: Math.max(20, topInset + 8),
+      paddingHorizontal: 16,
+      paddingBottom: 28,
+    },
+
+    // Today: the map runs edge to edge and the sheet overlaps it by 26px.
+    mapScroll: {
+      flexGrow: 1,
+    },
+
+    sheet: {
+      flexGrow: 1,
+      marginTop: -26,
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
       backgroundColor:
         theme.colors.background,
+      paddingTop: 10,
+      paddingHorizontal: 16,
+      paddingBottom: 28,
+      gap: 14,
     },
 
-    title: {
-      fontSize:
-        theme.type.title *
-        theme.textScale,
-      fontWeight: "800",
-      color: theme.colors.ink,
-    },
-
-    badge: {
-      backgroundColor:
-        theme.colors.primarySoft,
-      borderRadius:
-        theme.radius.pill,
-      paddingHorizontal:
-        theme.spacing.sm,
-      paddingVertical:
-        theme.spacing.xs,
-    },
-
-    badgeText: {
-      color:
-        theme.colors.primaryInk,
-      fontSize:
-        theme.type.small *
-        theme.textScale,
-      fontWeight: "700",
-    },
-
-    content: {
-      paddingHorizontal:
-        theme.spacing.lg,
-      paddingBottom:
-        40 + bottomInset,
+    grab: {
+      width: 40,
+      height: 5,
+      borderRadius: 3,
+      backgroundColor: theme.colors.line,
+      alignSelf: "center",
+      marginBottom: 4,
     },
   });

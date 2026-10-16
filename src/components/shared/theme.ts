@@ -30,12 +30,18 @@ export interface ThemeTokens {
     water: string;
     trail: string;
     shadow: string;
+    // Added for the HTML-prototype redesign (map pin, sheet scrim, avatar palette p1-p6).
+    pin: string;
+    scrim: string;
+    avatars: string[];
   };
   spacing: { xxs: number; xs: number; sm: number; md: number; lg: number; xl: number; xxl: number };
   radius: { control: number; card: number; pill: number };
   type: { body: number; small: number; section: number; title: number; hero: number };
   textScale: number;
   fontFamily: string;
+  // Added for the redesign: true for the dark palette.
+  isDark: boolean;
 }
 
 const spacing = { xxs: 4, xs: 8, sm: 12, md: 16, lg: 20, xl: 24, xxl: 28 };
@@ -53,8 +59,10 @@ export const themeTokens: Record<"light" | "dark", ThemeTokens> = {
       heroMuted: "#B5D3DA", heroButton: "#96E4E2", heroButtonInk: "#0A2E3A", map: "#E4EEF0",
       block: "#D6E5E8", road: "#FFFFFF", park: "#CFE6E6", water: "#BAD7EE", trail: "#2B7DE0",
       shadow: "rgba(18, 55, 71, 0.10)",
+      pin: "#0E5F73", scrim: "rgba(10,30,38,.45)",
+      avatars: ["#0F7D86", "#0E5F73", "#B26A00", "#7A4A8C", "#4A6572", "#C4503F"],
     },
-    spacing, radius, type, textScale: 1, fontFamily,
+    spacing, radius, type, textScale: 1, fontFamily, isDark: false,
   },
   dark: {
     colors: {
@@ -65,8 +73,10 @@ export const themeTokens: Record<"light" | "dark", ThemeTokens> = {
       heroMuted: "#9EC3CB", heroButton: "#96E4E2", heroButtonInk: "#0A2E3A", map: "#14262B",
       block: "#1A3238", road: "#2A454C", park: "#17383A", water: "#1B3A52", trail: "#6FB1FF",
       shadow: "rgba(0, 0, 0, 0.35)",
+      pin: "#5CC7DE", scrim: "rgba(0,0,0,.6)",
+      avatars: ["#2FC4C4", "#5CC7DE", "#E0A040", "#C493D6", "#93ADB8", "#FF8F7E"],
     },
-    spacing, radius, type, textScale: 1, fontFamily,
+    spacing, radius, type, textScale: 1, fontFamily, isDark: true,
   },
 };
 
