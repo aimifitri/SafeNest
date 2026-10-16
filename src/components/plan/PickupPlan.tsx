@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -20,6 +20,12 @@ const weekdays: { key: Weekday; label: string }[] = [
 
 const dismissalOptions = ["11:00 AM", "11:30 AM", "12:00 PM", "12:30 PM", "1:00 PM", "1:30 PM", "2:00 PM", "2:30 PM", "3:00 PM"];
 
+type VerificationRecord = { collectorId: string | null; state: VerificationState };
+
+// Demo memory survives Plan remounts, but not app restarts. Collector changes
+// away and back while Plan is unmounted cannot be detected here.
+let savedVerification: VerificationRecord | null = null;
+
 export function PickupPlan() {
   const {
     theme, trustedHelpers, temporaryDismissal, setTemporaryDismissal,
@@ -36,22 +42,75 @@ export function PickupPlan() {
   const dismissal = dismissalOverride ?? originalDismissal;
   const [isDismissalModalVisible, setIsDismissalModalVisible] = useState(false);
   const [selectedDismissal, setSelectedDismissal] = useState(dismissal);
-  const availableHelpers = trustedHelpers.filter((helper) => helper.state === "active");
-  const [selectedHelperId, setSelectedHelperId] = useState<string | null>(availableHelpers[0]?.id ?? null);
-  const [verificationState, setVerificationState] = useState<VerificationState>(teacherPhotoVerification.state);
+  // UI-only preview: never used by Today or the temporary dismissal override.
+  const [weeklyPreview, setWeeklyPreview] = useState(() => ({ ...schedule.weekdayTimes }));
+  const [editingWeekday, setEditingWeekday] = useState<Weekday | null>(null);
+  const [draftWeeklyTime, setDraftWeeklyTime] = useState("");
+  const editingDayLabel = weekdays.find((day) => day.key === editingWeekday)?.label;
+  const pickerTime = editingWeekday !== null ? draftWeeklyTime : selectedDismissal;
+  const availableHelpers = trustedHelpers.filter(
+    (helper) => helper.state === "active"
+  );
+  const [draftHelperId, setDraftHelperId] = useState<string | null>(availableHelpers[0]?.id ?? null);
   const [notice, setNotice] = useState("");
   const backupState = backupRequest.state;
-  const selectedBackupHelperId = backupState === "requested" && backupRequest.helperId
-    ? backupRequest.helperId
-    : selectedHelperId;
-  const backupHelper = trustedHelpers.find((helper) => helper.id === backupRequest.helperId)
-    ?? availableHelpers.find((helper) => helper.id === selectedHelperId);
+  const hasBackupRequest = backupState !== "idle";
+  const isBackupResolved = backupState === "accepted" || backupState === "declined";
+  const draftHelper = availableHelpers.find((helper) => helper.id === draftHelperId) ?? availableHelpers[0];
+  // Existing requests always belong to the context helper, never the local draft.
+  const selectedBackupHelperId = hasBackupRequest ? backupRequest.helperId : draftHelper?.id;
+  const backupHelper = hasBackupRequest
+    ? trustedHelpers.find((helper) => helper.id === backupRequest.helperId)
+    : undefined;
+  const requestHelper = hasBackupRequest
+    ? availableHelpers.find((helper) => helper.id === backupRequest.helperId)
+    : draftHelper;
   const scheduledCollector = [...mockData.familyMembers, ...trustedHelpers].find((person) => person.id === pickupStatus.collectorId);
   const collector = backupState === "accepted" ? backupHelper ?? scheduledCollector : scheduledCollector;
+  const collectorId = collector?.id ?? null;
+  const [verification, setVerification] = useState<VerificationRecord>(() =>
+    savedVerification?.collectorId === collectorId
+      ? savedVerification
+      : { collectorId, state: "notStarted" },
+  );
+  // Never display the previous collector's decision, even before the reset commits.
+  const verificationState = verification.collectorId === collectorId ? verification.state : "notStarted";
+
+  useLayoutEffect(() => {
+    if (savedVerification?.collectorId !== collectorId) {
+      savedVerification = { collectorId, state: "notStarted" };
+    }
+    setVerification(savedVerification);
+  }, [collectorId]);
+
+  const setVerificationState = (state: VerificationState) => {
+    // A missing collector cannot receive a teacher decision.
+    if (collectorId === null) return;
+    const next: VerificationRecord = { collectorId, state };
+    savedVerification = next;
+    setVerification(next);
+  };
 
   const openDismissalSelector = () => {
     setSelectedDismissal(dismissal);
     setIsDismissalModalVisible(true);
+  };
+
+  const openWeeklyEditor = (weekday: Weekday) => {
+    setDraftWeeklyTime(weeklyPreview[weekday]);
+    setEditingWeekday(weekday);
+  };
+
+  const closeTimeSelector = () => {
+    setIsDismissalModalVisible(false);
+    setEditingWeekday(null);
+  };
+
+  const saveWeeklyPreview = () => {
+    if (editingWeekday === null || !dismissalOptions.includes(draftWeeklyTime)) return;
+    setWeeklyPreview((current) => ({ ...current, [editingWeekday]: draftWeeklyTime }));
+    setNotice(`${editingDayLabel} preview set to ${draftWeeklyTime}. Today and the shared schedule are unchanged.`);
+    setEditingWeekday(null);
   };
 
   const saveDismissal = () => {
@@ -66,13 +125,14 @@ export function PickupPlan() {
   };
 
   const requestBackup = () => {
-    const helper = availableHelpers.find((item) => item.id === selectedHelperId) ?? availableHelpers[0];
-    requestBackupPickup(helper?.id);
-    setNotice(helper ? `Demo request sent to ${helper.name}.` : "Demo backup request started.");
+    if (!requestHelper) return;
+    requestBackupPickup(requestHelper.id);
+    setNotice(`Demo request sent to ${requestHelper.name}.`);
   };
 
   const selectBackupHelper = (helperId: string) => {
-    setSelectedHelperId(helperId);
+    if (isBackupResolved) return;
+    setDraftHelperId(helperId);
     if (backupState === "requested") {
       const helper = availableHelpers.find((item) => item.id === helperId);
       requestBackupPickup(helperId);
@@ -108,13 +168,17 @@ export function PickupPlan() {
       </Card>
 
       <SectionHeading title="School ends each day" />
+      <Text style={styles.muted}>Regular schedule preview only. Saved edits stay on this screen until it is closed; Today and the shared schedule are unchanged. Today's temporary dismissal is separate.</Text>
       <Card style={styles.scheduleCard}>
         {weekdays.map((day, index) => <View key={day.key}>
           {index > 0 ? <View style={styles.separator} /> : null}
           <View style={[styles.dayRow, day.key === today && styles.todayRow]}>
             <Text style={[styles.dayName, day.key === today && styles.todayText]}>{day.label}</Text>
             {day.key === today ? <Text style={styles.todayTag}>TODAY</Text> : null}
-            <Text style={[styles.dayTime, day.key === today && styles.todayText]}>{day.key === today ? dismissal : schedule.weekdayTimes[day.key]}</Text>
+            <Text style={[styles.dayTime, day.key === today && styles.todayText]}>{weeklyPreview[day.key]}</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel={`Edit ${day.label} regular dismissal preview`} onPress={() => openWeeklyEditor(day.key)} style={styles.weekdayEditButton}>
+              <Text style={styles.resetText}>Edit</Text>
+            </Pressable>
           </View>
         </View>)}
       </Card>
@@ -132,11 +196,16 @@ export function PickupPlan() {
       <SectionHeading title="Pickup backup" />
       <Card style={styles.card}>
         <View style={styles.rowTop}><View style={styles.grow}><Text style={styles.cardTitle}>Ask a trusted helper</Text><Text style={styles.muted}>A backup request is simulated locally.</Text></View><StatusPill label={backupStateLabel(backupState)} tone={backupState === "accepted" ? "success" : backupState === "declined" ? "danger" : backupState === "requested" ? "warning" : "neutral"} /></View>
-        {availableHelpers.length > 0 ? <View style={styles.helperChoices}>
-          {availableHelpers.map((helper) => <Pressable key={helper.id} accessibilityRole="radio" accessibilityState={{ checked: selectedBackupHelperId === helper.id }} onPress={() => selectBackupHelper(helper.id)} style={[styles.helperChoice, selectedBackupHelperId === helper.id && styles.helperChoiceSelected]}><Text style={[styles.helperChoiceName, selectedBackupHelperId === helper.id && styles.helperChoiceSelectedText]}>{helper.name}</Text><Text style={styles.helperChoiceRole}>{helper.role}</Text></Pressable>)}
+        {availableHelpers.length === 0 && !hasBackupRequest ? <View>
+          <Text style={styles.cardTitle}>No approved helpers available</Text>
+          <Text style={styles.muted}>Add a trusted helper in Circle and wait for approval before requesting backup pickup.</Text>
         </View> : null}
+        {availableHelpers.length > 0 ? <View style={styles.helperChoices}>
+          {availableHelpers.map((helper) => <Pressable key={helper.id} accessibilityRole="radio" accessibilityState={{ checked: selectedBackupHelperId === helper.id, disabled: isBackupResolved }} disabled={isBackupResolved} onPress={() => selectBackupHelper(helper.id)} style={[styles.helperChoice, selectedBackupHelperId === helper.id && styles.helperChoiceSelected]}><Text style={[styles.helperChoiceName, selectedBackupHelperId === helper.id && styles.helperChoiceSelectedText]}>{helper.name}</Text><Text style={styles.helperChoiceRole}>{helper.role}</Text></Pressable>)}
+        </View> : null}
+        {isBackupResolved ? <Text style={styles.muted}>Clear the demo request to choose a different helper. Starting another request uses the same helper.</Text> : null}
         {backupState !== "idle" && backupHelper ? <View style={styles.helperRow}><Avatar name={backupHelper.name} size={42} /><View style={styles.grow}><Text style={styles.helperName}>{backupHelper.name}</Text><Text style={styles.muted}>{backupHelper.role} · {backupState === "accepted" ? "Accepted in this demo" : backupState === "declined" ? "Declined in this demo" : "Awaiting simulated response"}</Text></View></View> : null}
-        {backupState === "idle" || backupState === "accepted" || backupState === "declined" ? <PrimaryButton label={backupState === "idle" ? "Request backup pickup" : "Start another demo request"} disabled={availableHelpers.length === 0} onPress={requestBackup} /> : <>
+        {backupState === "idle" || backupState === "accepted" || backupState === "declined" ? <PrimaryButton label={backupState === "idle" ? "Request backup pickup" : "Start another demo request"} disabled={!requestHelper} onPress={requestBackup} /> : <>
           {backupState === "requested" ? <View style={styles.responseActions}>
             <Pressable accessibilityRole="button" onPress={() => respondToBackup(true)} style={styles.acceptButton}><Text style={styles.acceptText}>Simulate accept</Text></Pressable>
             <Pressable accessibilityRole="button" onPress={() => respondToBackup(false)} style={styles.declineButton}><Text style={styles.declineText}>Simulate decline</Text></Pressable>
@@ -168,25 +237,25 @@ export function PickupPlan() {
         <Step number="4" title="Child leaves after confirmation" detail="The teacher confirmation shown here is a local demo simulation." last />
       </Card>
 
-      <Modal visible={isDismissalModalVisible} transparent animationType="slide" onRequestClose={() => setIsDismissalModalVisible(false)}>
+      <Modal visible={isDismissalModalVisible || editingWeekday !== null} transparent animationType="slide" onRequestClose={closeTimeSelector}>
         <View style={styles.modalOverlay}>
-          <Pressable accessibilityRole="button" accessibilityLabel="Close dismissal time selector" onPress={() => setIsDismissalModalVisible(false)} style={styles.modalBackdrop} />
+          <Pressable accessibilityRole="button" accessibilityLabel="Close dismissal time selector" onPress={closeTimeSelector} style={styles.modalBackdrop} />
           <View style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, theme.spacing.md) }]}>
             <View style={styles.modalHandle} />
-            <Text accessibilityRole="header" style={styles.modalTitle}>Choose dismissal time</Text>
-            <Text style={styles.modalSubtitle}>Select a time for today. This demo change is temporary.</Text>
+            <Text accessibilityRole="header" style={styles.modalTitle}>{editingWeekday !== null ? `${editingDayLabel} regular time · Preview` : "Choose dismissal time"}</Text>
+            <Text style={styles.modalSubtitle}>{editingWeekday !== null ? "Choose a regular dismissal time to preview on Plan only. This does not update Today or today's temporary dismissal." : "Select a time for today. This demo change is temporary."}</Text>
             <ScrollView style={styles.timeOptionsList} contentContainerStyle={styles.timeOptionsContent} showsVerticalScrollIndicator>
               {dismissalOptions.map((time) => {
-                const selected = selectedDismissal === time;
-                return <Pressable key={time} accessibilityRole="radio" accessibilityState={{ checked: selected }} onPress={() => setSelectedDismissal(time)} style={({ pressed }) => [styles.timeOption, selected && styles.timeOptionSelected, pressed && styles.timeOptionPressed]}>
+                const selected = pickerTime === time;
+                return <Pressable key={time} accessibilityRole="radio" accessibilityState={{ checked: selected }} onPress={() => editingWeekday !== null ? setDraftWeeklyTime(time) : setSelectedDismissal(time)} style={({ pressed }) => [styles.timeOption, selected && styles.timeOptionSelected, pressed && styles.timeOptionPressed]}>
                   <Text style={[styles.timeOptionText, selected && styles.timeOptionTextSelected]}>{time}</Text>
                   {selected ? <Text style={styles.timeOptionCheck}>✓</Text> : null}
                 </Pressable>;
               })}
             </ScrollView>
             <View style={styles.modalActions}>
-              <SecondaryButton label="Cancel" onPress={() => setIsDismissalModalVisible(false)} />
-              <PrimaryButton label="Save demo time" onPress={saveDismissal} />
+              <SecondaryButton label="Cancel" onPress={closeTimeSelector} />
+              <PrimaryButton label={editingWeekday !== null ? "Save preview" : "Save demo time"} disabled={editingWeekday !== null && !dismissalOptions.includes(draftWeeklyTime)} onPress={editingWeekday !== null ? saveWeeklyPreview : saveDismissal} />
             </View>
           </View>
         </View>
@@ -232,6 +301,7 @@ const makeStyles = (theme: ThemeTokens) => StyleSheet.create({
   infoLabel: { color: theme.colors.muted, fontSize: theme.type.small * theme.textScale }, infoValue: { color: theme.colors.ink, fontSize: theme.type.body * theme.textScale, fontWeight: "700" },
   scheduleCard: { paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.xs, marginTop: theme.spacing.sm, marginBottom: theme.spacing.md },
   dayRow: { minHeight: 51, flexDirection: "row", alignItems: "center", gap: theme.spacing.xs }, todayRow: { backgroundColor: theme.colors.primarySoft, marginHorizontal: -theme.spacing.sm, paddingHorizontal: theme.spacing.sm, borderRadius: 12 },
+  weekdayEditButton: { minHeight: 44, minWidth: 44, alignItems: "center", justifyContent: "center" },
   dayName: { flex: 1, color: theme.colors.ink, fontSize: theme.type.body * theme.textScale, fontWeight: "600" }, todayText: { color: theme.colors.primaryInk, fontWeight: "800" },
   todayTag: { color: theme.colors.primaryInk, fontSize: 8 * theme.textScale, letterSpacing: 0.4, fontWeight: "900" }, dayTime: { color: theme.colors.ink, fontSize: theme.type.body * theme.textScale, fontWeight: "700" },
   separator: { height: 1, backgroundColor: theme.colors.line },
