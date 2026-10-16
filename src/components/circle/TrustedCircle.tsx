@@ -24,10 +24,18 @@ import type { ThemeTokens } from "../shared/theme";
 
 type LocalTrustedHelper = TrustedHelper & { age: number };
 
+const pickupTimeOptions = ["1:00 PM", "1:30 PM", "2:00 PM", "2:30 PM", "3:00 PM"];
+
 export function TrustedCircle() {
   const { theme, trustedHelpers, setTrustedHelperState } = useAppContext();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [notice, setNotice] = useState("");
+  const [primaryContactIds, setPrimaryContactIds] = useState<Record<string, boolean>>({
+    abu: true,
+  });
+  const [pickupRequests, setPickupRequests] = useState<Record<string, string>>({});
+  const [pickupTarget, setPickupTarget] = useState<TrustedHelper | null>(null);
+  const [selectedPickupTime, setSelectedPickupTime] = useState("2:30 PM");
   const [availability, setAvailability] = useState<Record<string, boolean>>({
     abu: true,
     siti: false,
@@ -54,6 +62,8 @@ export function TrustedCircle() {
     ...localHelpers.filter((helper) => helper.state === "pending"),
   ];
   const familyMembers = mockData.familyMembers;
+  const primaryHelpers = approvedHelpers.filter((helper) => primaryContactIds[helper.id]);
+  const regularHelpers = approvedHelpers.filter((helper) => !primaryContactIds[helper.id]);
 
   const approve = (helper: TrustedHelper) => {
     if (localHelpers.some((item) => item.id === helper.id)) {
@@ -91,11 +101,35 @@ export function TrustedCircle() {
       const { [helper.id]: _removedAvailability, ...remainingAvailability } = current;
       return remainingAvailability;
     });
+    setPrimaryContactIds((current) => {
+      const { [helper.id]: _removedPrimaryContact, ...remainingPrimaryContacts } = current;
+      return remainingPrimaryContacts;
+    });
+    setPickupRequests((current) => {
+      const { [helper.id]: _removedRequest, ...remainingRequests } = current;
+      return remainingRequests;
+    });
     setNotice(`${helper.name} removed from the trusted circle in this demo.`);
   };
 
   const toggleAvailability = (personId: string) => {
     setAvailability((current) => ({ ...current, [personId]: !current[personId] }));
+  };
+
+  const togglePrimaryContact = (personId: string) => {
+    setPrimaryContactIds((current) => ({ ...current, [personId]: !current[personId] }));
+  };
+
+  const openPickupRequest = (helper: TrustedHelper) => {
+    setSelectedPickupTime("2:30 PM");
+    setPickupTarget(helper);
+  };
+
+  const sendPickupRequest = () => {
+    if (!pickupTarget) return;
+    setPickupRequests((current) => ({ ...current, [pickupTarget.id]: selectedPickupTime }));
+    setNotice(`Demo pickup request sent to ${pickupTarget.name} for ${selectedPickupTime}.`);
+    setPickupTarget(null);
   };
 
   const closeAddModal = () => {
@@ -151,19 +185,27 @@ export function TrustedCircle() {
           member,
           index,
           "family",
-          mockData.caregivers.some((caregiver) => caregiver.id === member.id && caregiver.isAdmin),
         ))}
       </Card>
 
       <SectionHeading title="Approved Helpers" />
       <Card style={styles.listCard}>
-        {approvedHelpers.length
-          ? approvedHelpers.map((helper, index) => renderMember(
-            helper,
-            index,
-            "helper",
-            helper.id === mockData.pickupStatus.collectorId,
-          ))
+        {approvedHelpers.length ? (
+          <>
+            {primaryHelpers.length > 0 ? (
+              <>
+                <Text style={styles.groupHeading}>Primary Emergency Contacts</Text>
+                {primaryHelpers.map((helper, index) => renderMember(helper, index, "helper"))}
+              </>
+            ) : null}
+            {regularHelpers.length > 0 ? (
+              <>
+                <Text style={styles.groupHeading}>Regular Helpers</Text>
+                {regularHelpers.map((helper, index) => renderMember(helper, index, "helper"))}
+              </>
+            ) : null}
+          </>
+        )
           : <Text style={styles.empty}>No approved helpers yet.</Text>}
       </Card>
 
@@ -304,6 +346,55 @@ export function TrustedCircle() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+      <Modal
+        visible={pickupTarget !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPickupTarget(null)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text accessibilityRole="header" style={styles.modalTitle}>Request a pickup</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close pickup request"
+                onPress={() => setPickupTarget(null)}
+                hitSlop={8}
+              >
+                <Text style={styles.closeText}>Close</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.modalDescription}>
+              Choose a pickup time for {pickupTarget?.name ?? "your helper"}. This request is simulated.
+            </Text>
+            <View style={styles.timeOptions}>
+              {pickupTimeOptions.map((time) => {
+                const selected = selectedPickupTime === time;
+                return (
+                  <Pressable
+                    key={time}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected }}
+                    onPress={() => setSelectedPickupTime(time)}
+                    style={({ pressed }) => [
+                      styles.timeOption,
+                      selected && styles.selectedTimeOption,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <Text style={[styles.timeOptionText, selected && styles.selectedTimeOptionText]}>
+                      {time}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <PrimaryButton label="Send demo request" onPress={sendPickupRequest} />
+            <Text style={styles.modalFootnote}>Demo only · No real notification is sent.</Text>
+          </View>
+        </View>
+      </Modal>
     </AppShell>
   );
 
@@ -311,11 +402,12 @@ export function TrustedCircle() {
     member: FamilyMember | TrustedHelper,
     index: number,
     kind: "family" | "helper",
-    isPrimaryContact: boolean,
   ) {
     const isAvailable = availability[member.id] ?? false;
     const isCollector = member.id === mockData.pickupStatus.collectorId;
     const age = "age" in member ? member.age : undefined;
+    const isPrimaryContact = primaryContactIds[member.id] ?? false;
+    const requestedTime = kind === "helper" ? pickupRequests[member.id] : undefined;
 
     return (
       <View key={member.id}>
@@ -325,7 +417,7 @@ export function TrustedCircle() {
           <View style={styles.memberInfo}>
             <View style={styles.nameLine}>
               <Text style={styles.memberName}>{member.name}</Text>
-              {isPrimaryContact ? <Text style={styles.primaryTag}>★ PRIMARY CONTACT</Text> : null}
+              {isPrimaryContact ? <Text style={styles.primaryTag}>★ PRIMARY EMERGENCY CONTACT</Text> : null}
               {isCollector ? <Text style={styles.collectorTag}>TODAY'S PICKUP</Text> : null}
             </View>
             <Text style={styles.memberMeta}>
@@ -353,17 +445,49 @@ export function TrustedCircle() {
               {isAvailable ? "Available at 2:00 PM" : "Unavailable"}
             </Text>
           </Pressable>
+          <Pressable
+            accessibilityRole="switch"
+            accessibilityLabel={`${member.name} primary emergency contact`}
+            accessibilityHint="Toggle this person as a primary emergency contact."
+            accessibilityState={{ checked: isPrimaryContact }}
+            onPress={() => togglePrimaryContact(member.id)}
+            style={({ pressed }) => [
+              styles.primaryToggle,
+              isPrimaryContact && styles.primaryToggleActive,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={[styles.primaryToggleText, isPrimaryContact && styles.primaryToggleActiveText]}>
+              {isPrimaryContact ? "★ Primary" : "☆ Set primary"}
+            </Text>
+          </Pressable>
           {kind === "helper" ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Remove ${member.name} from trusted circle`}
-              onPress={() => removeHelper(member)}
-              style={({ pressed }) => [styles.removeButton, pressed && styles.pressed]}
-            >
-              <Text style={styles.removeText}>Remove</Text>
-            </Pressable>
+            <>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Request pickup from ${member.name}`}
+                onPress={() => openPickupRequest(member)}
+                style={({ pressed }) => [styles.requestButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.requestText}>Request pickup</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Remove ${member.name} from trusted circle`}
+                onPress={() => removeHelper(member)}
+                style={({ pressed }) => [styles.removeButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.removeText}>Remove</Text>
+              </Pressable>
+            </>
           ) : null}
         </View>
+        {requestedTime ? (
+          <View style={styles.requestStatus}>
+            <StatusPill label="Request sent · Pending" tone="info" />
+            <Text style={styles.requestTime}>Pickup time: {requestedTime}</Text>
+          </View>
+        ) : null}
       </View>
     );
   }
@@ -405,6 +529,14 @@ const makeStyles = (theme: ThemeTokens) => StyleSheet.create({
     paddingVertical: theme.spacing.xs,
     marginTop: theme.spacing.sm,
     marginBottom: theme.spacing.md,
+  },
+  groupHeading: {
+    color: theme.colors.primaryInk,
+    fontSize: theme.type.small * theme.textScale,
+    fontWeight: "800",
+    letterSpacing: 0.4,
+    marginTop: theme.spacing.sm,
+    marginBottom: theme.spacing.xs,
   },
   memberRow: {
     flexDirection: "row",
@@ -478,6 +610,25 @@ const makeStyles = (theme: ThemeTokens) => StyleSheet.create({
     fontWeight: "700",
   },
   availableText: { color: theme.colors.success },
+  primaryToggle: {
+    minHeight: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+  },
+  primaryToggleActive: {
+    backgroundColor: theme.colors.warning,
+    borderColor: theme.colors.warning,
+  },
+  primaryToggleText: {
+    color: theme.colors.muted,
+    fontSize: theme.type.small * theme.textScale,
+    fontWeight: "700",
+  },
+  primaryToggleActiveText: { color: theme.colors.warningInk },
   separator: { height: 1, backgroundColor: theme.colors.line },
   empty: {
     color: theme.colors.muted,
@@ -534,6 +685,31 @@ const makeStyles = (theme: ThemeTokens) => StyleSheet.create({
   },
   removeText: {
     color: theme.colors.danger,
+    fontSize: theme.type.small * theme.textScale,
+    fontWeight: "700",
+  },
+  requestButton: {
+    minHeight: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.pill,
+    paddingHorizontal: theme.spacing.sm,
+    backgroundColor: theme.colors.primary,
+  },
+  requestText: {
+    color: theme.colors.onPrimary,
+    fontSize: theme.type.small * theme.textScale,
+    fontWeight: "700",
+  },
+  requestStatus: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: theme.spacing.sm,
+    paddingBottom: theme.spacing.sm,
+  },
+  requestTime: {
+    color: theme.colors.primaryInk,
     fontSize: theme.type.small * theme.textScale,
     fontWeight: "700",
   },
@@ -603,4 +779,31 @@ const makeStyles = (theme: ThemeTokens) => StyleSheet.create({
     fontSize: theme.type.small * theme.textScale,
     textAlign: "center",
   },
+  timeOptions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: theme.spacing.xs,
+    marginVertical: theme.spacing.xs,
+  },
+  timeOption: {
+    minHeight: 42,
+    minWidth: 78,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+    borderRadius: theme.radius.control,
+    paddingHorizontal: theme.spacing.sm,
+    backgroundColor: theme.colors.background,
+  },
+  selectedTimeOption: {
+    borderColor: theme.colors.primary,
+    backgroundColor: theme.colors.primarySoft,
+  },
+  timeOptionText: {
+    color: theme.colors.muted,
+    fontSize: theme.type.small * theme.textScale,
+    fontWeight: "700",
+  },
+  selectedTimeOptionText: { color: theme.colors.primaryInk },
 });
