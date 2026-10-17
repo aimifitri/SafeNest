@@ -75,6 +75,7 @@ export function T({ s = 1, w = 400, c, ls, lh, up, align, style, lines, tab, chi
   if (c === "muted") color = tc.muted;
   else if (c && c !== "ink") color = c;
   const st: TextStyle = {
+    fontFamily: theme.fontFamily,
     fontSize: size,
     lineHeight: size * (lh ?? 1.45),
     color,
