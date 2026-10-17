@@ -10,11 +10,17 @@ import type { PropsWithChildren } from "react";
 import { useColorScheme } from "react-native";
 
 import type {
+  FontStyle,
   TextScale,
   ThemeMode,
   ThemeTokens,
 } from "./theme";
-import { textScaleValues, themeTokens } from "./theme";
+import {
+  DEFAULT_FONT_STYLE,
+  getFontSpec,
+  textScaleValues,
+  themeTokens,
+} from "./theme";
 
 import { mockData } from "./mockData";
 
@@ -45,6 +51,10 @@ interface AppContextValue {
 
   textScale: TextScale;
   setTextScale: (scale: TextScale) => void;
+
+  // Font style picked in Settings. Applied app-wide through theme.fontFamily.
+  fontStyle: FontStyle;
+  setFontStyle: (style: FontStyle) => void;
 
   // Regular Monday-Friday dismissal schedule.
   weeklySchedule: WeekdayTimes;
@@ -100,6 +110,9 @@ export function AppProvider({
 
   const [textScale, setTextScale] =
     useState<TextScale>("default");
+
+  const [fontStyle, setFontStyle] =
+    useState<FontStyle>(DEFAULT_FONT_STYLE);
 
   // Initial schedule comes from existing mock data.
   const [weeklySchedule, setWeeklySchedule] =
@@ -170,8 +183,10 @@ export function AppProvider({
     () => ({
       ...themeTokens[resolvedTheme],
       textScale: textScaleValues[textScale],
+      fontFamily: getFontSpec(fontStyle).regular,
+      font: getFontSpec(fontStyle),
     }),
-    [resolvedTheme, textScale]
+    [resolvedTheme, textScale, fontStyle]
   );
 
   const value = useMemo<AppContextValue>(
@@ -186,6 +201,9 @@ export function AppProvider({
 
       textScale,
       setTextScale,
+
+      fontStyle,
+      setFontStyle,
 
       // Shared weekly schedule.
       weeklySchedule,
@@ -230,6 +248,7 @@ export function AppProvider({
       selectedCaregiver,
       themeMode,
       textScale,
+      fontStyle,
       weeklySchedule,
       temporaryDismissal,
       backupRequest,

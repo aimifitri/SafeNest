@@ -1,12 +1,13 @@
 // Illustrated map from the HTML prototype (400x320 viewBox, same roads/blocks/water/park shapes).
 // Everything on it is simulated; positions are supplied by the caller.
 import { useEffect, useId, useMemo, useState } from "react";
-import { Platform, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import type { LayoutChangeEvent } from "react-native";
 import Animated, { Easing, useAnimatedProps, useReducedMotion, useSharedValue, withTiming } from "react-native-reanimated";
 import Svg, { Circle, Defs, G, Path, Pattern, Rect, Text as SvgText } from "react-native-svg";
 
 import { useAppContext } from "./AppContext";
+import { fontFace } from "./theme";
 import { avatarIndex } from "./Avatar";
 import { EASE_OUT, anim } from "./motion";
 
@@ -56,7 +57,6 @@ const CUM: number[] = [];
 })();
 const TL = CUM[CUM.length - 1];
 const TRAIL_D = "M270 96 C270 130 300 150 320 190 S300 270 220 285 L140 288";
-const SVG_FONT = Platform.OS === "web" ? 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif' : undefined;
 
 function easeIO(x: number): number {
   "worklet";
@@ -174,8 +174,8 @@ export function MapView({ dots, trail = false, label, schoolText = "School", sto
           <Rect x={-17} y={-17} width={34} height={34} rx={11} fill={c.pin} stroke="#FFFFFF" strokeWidth={3} />
           <Path d="M-7 5V-3l7-5 7 5V5zM-2 5V0h4v5" fill="none" stroke="#FFFFFF" strokeWidth={2} strokeLinejoin="round" />
         </G>
-        <SvgText x={270} y={130} textAnchor="middle" fontFamily={SVG_FONT} fontSize={12} fontWeight="700" stroke={c.map} strokeWidth={4} fill={c.map}>{schoolText}</SvgText>
-        <SvgText x={270} y={130} textAnchor="middle" fontFamily={SVG_FONT} fontSize={12} fontWeight="700" fill={c.ink}>{schoolText}</SvgText>
+        <SvgText x={270} y={130} textAnchor="middle" fontFamily={fontFace(theme.font, 700).fontFamily} fontSize={12} fontWeight="700" stroke={c.map} strokeWidth={4} fill={c.map}>{schoolText}</SvgText>
+        <SvgText x={270} y={130} textAnchor="middle" fontFamily={fontFace(theme.font, 700).fontFamily} fontSize={12} fontWeight="700" fill={c.ink}>{schoolText}</SvgText>
       </Svg>
 
       {sc > 0 && (
@@ -183,7 +183,7 @@ export function MapView({ dots, trail = false, label, schoolText = "School", sto
           <Animated.Text
             pointerEvents="none"
             style={{
-              position: "absolute", left: ox + 140 * sc - 80, width: 160, top: oy + 300 * sc, textAlign: "center", fontSize: 12, fontWeight: "700", color: c.ink,
+              position: "absolute", left: ox + 140 * sc - 80, width: 160, top: oy + 300 * sc, textAlign: "center", fontSize: 12, ...fontFace(theme.font, 700), color: c.ink,
               textShadowColor: c.map, textShadowRadius: 3, textShadowOffset: { width: 0, height: 0 },
               opacity: trail && stopped ? 1 : 0, transitionProperty: "opacity", transitionDuration: 400, transitionTimingFunction: "ease",
             }}
@@ -215,7 +215,7 @@ export function MapView({ dots, trail = false, label, schoolText = "School", sto
                     borderRadius: r + 1.5 * sc, backgroundColor: col, borderWidth: 3 * sc, borderColor: "#FFFFFF", alignItems: "center", justifyContent: "center",
                   }}
                 >
-                  <Text style={{ fontSize: 12 * sc, fontWeight: "700", color: "#FFFFFF", includeFontPadding: false }}>{ini}</Text>
+                  <Text style={{ fontSize: 12 * sc, color: "#FFFFFF", includeFontPadding: false, ...fontFace(theme.font, 700) }}>{ini}</Text>
                 </View>
               </Animated.View>
             );

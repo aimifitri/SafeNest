@@ -25,8 +25,9 @@ import type { ReactNode } from "react";
 import { Icon } from "../navigation/Icon";
 import { useAppContext } from "./AppContext";
 import { useLocalPendingCount } from "./pendingBadge";
-import { T } from "./ui";
-import type { ThemeTokens } from "./theme";
+import { Press, T } from "./ui";
+import { fontFace } from "./theme";
+import type { FontSpec, ThemeTokens } from "./theme";
 
 // ==================================
 // SAFENEST NAVIGATION
@@ -46,6 +47,8 @@ type AppShellProps = {
   header?: ReactNode;
   children: ReactNode;
   activeTab: TabId;
+  // Optional back link above the title (Settings sub-pages, like the prototype's settings header).
+  back?: { label: string; onPress: () => void };
 };
 
 // Icon names from Claude's icons.ts
@@ -106,6 +109,7 @@ function NavigationTab({
   color,
   onPress,
   textScale,
+  font,
   badge,
   badgeColor,
 }: {
@@ -114,6 +118,7 @@ function NavigationTab({
   color: string;
   onPress: () => void;
   textScale: number;
+  font: FontSpec;
   badge?: number;
   badgeColor: string;
 }) {
@@ -191,7 +196,7 @@ function NavigationTab({
             paddingHorizontal: 5,
           }}
         >
-          <Text style={{ color: "#FFFFFF", fontSize: 11, fontWeight: "700", lineHeight: 14, includeFontPadding: false }}>{badge}</Text>
+          <Text style={{ color: "#FFFFFF", fontSize: 11, lineHeight: 14, includeFontPadding: false, ...fontFace(font, 700) }}>{badge}</Text>
         </View>
       ) : null}
 
@@ -202,6 +207,7 @@ function NavigationTab({
           {
             color,
             fontSize: 11.5 * textScale,
+            ...fontFace(font, 600),
           },
         ]}
       >
@@ -221,7 +227,13 @@ export function AppShell({
   header,
   children,
   activeTab,
+  back,
 }: AppShellProps) {
+  const scrollRef = useRef<ScrollView>(null);
+  // A new page title (e.g. opening a Settings sub-page) starts at the top.
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [title]);
   const { theme, trustedHelpers, selectedCaregiver } = useAppContext();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -333,6 +345,7 @@ export function AppShell({
         }}
       >
         <ScrollView
+          ref={scrollRef}
           style={{ flex: 1 }}
           contentContainerStyle={
             header ? themed.mapScroll : themed.pageScroll
@@ -350,6 +363,17 @@ export function AppShell({
             </>
           ) : (
             <>
+              {back ? (
+                <Press
+                  onPress={back.onPress}
+                  label={back.label}
+                  scaleTo={0.96}
+                  style={{ alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 4, minHeight: 44, paddingRight: 12, marginBottom: -12, marginLeft: -6 }}
+                >
+                  <Icon name="back" size={22} color={theme.colors.primaryInk} stroke={2.2} />
+                  <T w={700} c={theme.colors.primaryInk}>{back.label}</T>
+                </Press>
+              ) : null}
               <View
                 accessibilityRole="header"
                 accessibilityHint={badge}
@@ -406,6 +430,7 @@ export function AppShell({
                       : theme.colors.muted
                   }
                   textScale={theme.textScale}
+                  font={theme.font}
                   badge={tab.key === "circle" ? pendingCount : 0}
                   badgeColor={theme.colors.danger}
                   onPress={() => {
