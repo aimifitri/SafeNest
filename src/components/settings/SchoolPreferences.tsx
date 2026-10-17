@@ -30,7 +30,7 @@ const preferenceOptions = [
 type PreferenceKey = (typeof preferenceOptions)[number]["key"];
 type Preferences = Record<PreferenceKey, boolean>;
 
-export function SchoolPreferences() {
+export function SchoolPreferences({ title = "Notifications" }: { title?: string } = {}) {
   const c = useColors();
   const [preferences, setPreferences] = useState<Preferences>({
     pickup: true,
@@ -44,7 +44,7 @@ export function SchoolPreferences() {
 
   return (
     <>
-      <SectionHeading title="Notifications" />
+      <SectionHeading title={title} />
       <Card tight>
         {preferenceOptions.map((option, index) => {
           const enabled = preferences[option.key];

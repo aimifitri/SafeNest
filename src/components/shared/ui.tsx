@@ -1,5 +1,5 @@
 // Shared visual primitives for the SafeNest redesign. They only read the existing
-// AppContext theme (colors, textScale); no business state lives here.
+// AppContext theme (colors, textScale, fontFamily); no business state lives here.
 import { createContext, forwardRef, useContext, useState } from "react";
 import type { ReactNode } from "react";
 import {
@@ -20,6 +20,7 @@ import Animated, {
 import { Icon } from "../navigation/Icon";
 import { useAppContext } from "./AppContext";
 import { EASE_OUT, W_EASE_OUT, anim } from "./motion";
+import { fontFace, tracking } from "./theme";
 import type { ThemeTokens } from "./theme";
 
 export function useReduce(): boolean {
@@ -75,12 +76,11 @@ export function T({ s = 1, w = 400, c, ls, lh, up, align, style, lines, tab, chi
   if (c === "muted") color = tc.muted;
   else if (c && c !== "ink") color = c;
   const st: TextStyle = {
-    fontFamily: theme.fontFamily,
     fontSize: size,
     lineHeight: size * (lh ?? 1.45),
     color,
-    fontWeight: String(w) as TextStyle["fontWeight"],
-    letterSpacing: ls != null ? ls * size : undefined,
+    ...fontFace(theme.font, w),
+    letterSpacing: ls != null ? tracking(theme.font, ls, size) : undefined,
     textAlign: align,
     textTransform: up ? "uppercase" : undefined,
     fontVariant: tab ? ["tabular-nums"] : undefined,
@@ -96,10 +96,13 @@ export function T({ s = 1, w = 400, c, ls, lh, up, align, style, lines, tab, chi
 
 export const OS_FONT_CAP = 1.2;
 
-/** App text-size setting combined with the capped OS font scale. Use it to decide when to stack columns. */
+/**
+ * App text-size setting combined with the capped OS font scale and the selected font's width.
+ * Use it to decide when to stack columns, so wide fonts (Balloon Bold, Serif) stack before they crowd.
+ */
 export function useEffectiveScale(): number {
   const { theme } = useAppContext();
-  return theme.textScale * Math.min(PixelRatio.getFontScale(), OS_FONT_CAP);
+  return theme.textScale * Math.min(PixelRatio.getFontScale(), OS_FONT_CAP) * theme.font.widthFactor;
 }
 
 // ---------------------------------------------------------------- pressable with scale feedback
@@ -373,7 +376,7 @@ export const Input = forwardRef<TextInput, InputProps>(function Input({ style, o
       style={[
         {
           minHeight: 52, borderRadius: 14, borderWidth: 1.5, borderColor: focus ? c.primary : c.line,
-          backgroundColor: c.background, paddingHorizontal: 14, width: "100%", color: c.ink, fontSize: fs,
+          backgroundColor: c.background, paddingHorizontal: 14, width: "100%", color: c.ink, fontSize: fs, ...fontFace(theme.font, 400),
           boxShadow: focus ? `0 0 0 3px ${c.primarySoft}` : undefined,
           outlineStyle: "none",
         } as unknown as TextStyle,

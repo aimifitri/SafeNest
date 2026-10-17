@@ -18,6 +18,9 @@ export const KF = {
   spin: { from: { transform: [{ rotate: "0deg" }] }, to: { transform: [{ rotate: "360deg" }] } },
   ping: { from: { transform: [{ scale: 0.85 }], opacity: 0.7 }, to: { transform: [{ scale: 1.15 }], opacity: 0 } },
   fade: { from: { opacity: 0 }, to: { opacity: 1 } },
+  // Settings sub-pages: push in from the right, pop back in from the left (prototype: .pushin / .popin).
+  pushIn: { from: { opacity: 0, transform: [{ translateX: 28 }] }, to: { opacity: 1, transform: [{ translateX: 0 }] } },
+  popIn: { from: { opacity: 0, transform: [{ translateX: -28 }] }, to: { opacity: 1, transform: [{ translateX: 0 }] } },
   fadeout: { from: { opacity: 1 }, to: { opacity: 0 } },
   up: { from: { transform: [{ translateY: "100%" }] }, to: { transform: [{ translateY: "0%" }] } },
   down: { from: { transform: [{ translateY: "0%" }] }, to: { transform: [{ translateY: "100%" }] } },
