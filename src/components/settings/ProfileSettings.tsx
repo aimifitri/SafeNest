@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Image,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -40,10 +41,46 @@ type AccountDraft = Pick<Caregiver, "name" | "phone" | "email" | "role"> & {
 
 type FontStyle = "serif" | "workSans" | "antic" | "balloonBold";
 type AccordionKey = "account" | "appearance" | "notifications" | "family" | "security" | "privacy";
-type ModalKind = "addAccount" | "editAccount" | "forgotPassword" | null;
+type ModalKind = "addAccount" | "editAccount" | "addChild" | "forgotPassword" | null;
 type PhotoTarget = "active" | "new" | "edit";
 type PushPreferenceKey = "pickupReminder" | "helperAvailability" | "systemAlerts";
 type PasskeyMethod = "devicePin" | "faceId" | "fingerprint";
+
+type ChildProfile = {
+  id: string;
+  name: string;
+  age: number;
+  schoolName: string;
+  schoolAddress: string;
+  className: string;
+  teacherName: string;
+  teacherPhone: string;
+};
+
+type ChildDraft = Omit<ChildProfile, "id" | "age"> & {
+  age: string;
+};
+
+const initialChild: ChildProfile = {
+  id: mockData.child.id,
+  name: mockData.child.name,
+  age: mockData.child.age,
+  schoolName: mockData.school.name,
+  schoolAddress: mockData.school.address,
+  className: mockData.child.className,
+  teacherName: mockData.school.teacher,
+  teacherPhone: mockData.school.teacherPhone,
+};
+
+const emptyChildDraft: ChildDraft = {
+  name: "",
+  age: "",
+  schoolName: "",
+  schoolAddress: "",
+  className: "",
+  teacherName: "",
+  teacherPhone: "",
+};
 
 const pushNotificationOptions: {
   key: PushPreferenceKey;
@@ -139,6 +176,8 @@ export function ProfileSettings() {
   const [modalKind, setModalKind] = useState<ModalKind>(null);
   const [feedback, setFeedback] = useState("");
   const [formError, setFormError] = useState("");
+  const [children, setChildren] = useState<ChildProfile[]>([initialChild]);
+  const [childDraft, setChildDraft] = useState<ChildDraft>(emptyChildDraft);
   const [draft, setDraft] = useState<AccountDraft>({
     name: "",
     phone: "",
@@ -160,7 +199,7 @@ export function ProfileSettings() {
     [theme, fontStyle],
   );
   const approvedHelpers = trustedHelpers.filter((helper) => helper.state === "active").length;
-  const { child, school, familyMembers } = mockData;
+  const { familyMembers } = mockData;
 
   useEffect(() => {
     if (selectedCaregiver && accounts.some((account) => account.id === selectedCaregiver.id)) {
@@ -250,6 +289,81 @@ export function ProfileSettings() {
     selectCaregiver(updatedAccount);
     setFeedback("Account details updated for this demo session.");
     setModalKind(null);
+  };
+
+  const openChildModal = () => {
+    setChildDraft(emptyChildDraft);
+    setFormError("");
+    setModalKind("addChild");
+  };
+
+  const updateChildDraft = (key: keyof ChildDraft, value: string) => {
+    setChildDraft((current) => ({ ...current, [key]: value }));
+    setFormError("");
+  };
+
+  const addChild = () => {
+    const age = Number(childDraft.age);
+    const requiredFields = [
+      childDraft.name,
+      childDraft.age,
+      childDraft.schoolName,
+      childDraft.schoolAddress,
+      childDraft.className,
+      childDraft.teacherName,
+      childDraft.teacherPhone,
+    ];
+
+    if (requiredFields.some((value) => !value.trim())) {
+      setFormError("Complete all child and school details.");
+      return;
+    }
+    if (!Number.isInteger(age) || age < 1 || age > 18) {
+      setFormError("Enter an age from 1 to 18.");
+      return;
+    }
+    if (!isValidPhone(childDraft.teacherPhone)) {
+      setFormError("Enter a valid teacher phone number with at least 9 digits.");
+      return;
+    }
+
+    const newChild: ChildProfile = {
+      id: `child-${Date.now()}`,
+      name: childDraft.name.trim(),
+      age,
+      schoolName: childDraft.schoolName.trim(),
+      schoolAddress: childDraft.schoolAddress.trim(),
+      className: childDraft.className.trim(),
+      teacherName: childDraft.teacherName.trim(),
+      teacherPhone: childDraft.teacherPhone.trim(),
+    };
+    setChildren((current) => [...current, newChild]);
+    setFeedback(`${newChild.name} added for this demo session.`);
+    setChildDraft(emptyChildDraft);
+    setFormError("");
+    setModalKind(null);
+  };
+
+  const openTeacherWhatsApp = async (phone: string) => {
+    const digits = phone.replace(/\D/g, "");
+    const internationalDigits = digits.startsWith("00")
+      ? digits.slice(2)
+      : digits.startsWith("0")
+        ? `60${digits.slice(1)}`
+        : digits;
+
+    if (internationalDigits.length < 9) {
+      setFeedback("Enter a valid teacher phone number before opening WhatsApp.");
+      return;
+    }
+
+    try {
+      await Linking.openURL(`https://wa.me/${internationalDigits}`);
+    } catch (error) {
+      setFeedback(error instanceof Error
+        ? `Unable to open WhatsApp: ${error.message}`
+        : "Unable to open WhatsApp.");
+    }
   };
 
   const addAccount = () => {
@@ -513,7 +627,7 @@ export function ProfileSettings() {
                         </Text>
                       </View>
                       <Text style={styles.demoNote}>
-                        Theme and text size use app settings. Font choices are simulated previews using available system fonts.
+                        Text size is shared across the app. Font choices preview available system fonts on this screen only.
                       </Text>
                     </View>
                   ) : null}
@@ -561,17 +675,42 @@ export function ProfileSettings() {
 
                   {option.key === "family" ? (
                     <View>
-                      <View style={styles.childSummary}>
-                        <Avatar name={child.name} size={44} />
-                        <View style={styles.profileSummary}>
-                          <Text style={styles.accountName}>{child.name}, age {child.age}</Text>
-                          <Text style={styles.mutedText}>Class {child.className}</Text>
+                      <Text style={styles.subheading}>Children</Text>
+                      {children.map((childProfile) => (
+                        <View key={childProfile.id} style={styles.childCard}>
+                          <View style={styles.childSummary}>
+                            <Avatar name={childProfile.name} size={44} />
+                            <View style={styles.profileSummary}>
+                              <Text style={styles.accountName}>{childProfile.name}, age {childProfile.age}</Text>
+                              <Text style={styles.mutedText}>Class / Grade: {childProfile.className}</Text>
+                            </View>
+                          </View>
+                          <DetailRow label="School" value={childProfile.schoolName} styles={styles} />
+                          <DetailRow label="School address" value={childProfile.schoolAddress} styles={styles} />
+                          <DetailRow label="Class / Grade" value={childProfile.className} styles={styles} />
+                          <DetailRow label="Classroom teacher" value={childProfile.teacherName} styles={styles} />
+                          <View style={styles.teacherPhoneRow}>
+                            <View style={styles.teacherPhoneText}>
+                              <Text style={styles.detailLabel}>Teacher phone</Text>
+                              <Text selectable style={styles.teacherPhoneValue}>{childProfile.teacherPhone}</Text>
+                            </View>
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`Message ${childProfile.teacherName} on WhatsApp`}
+                              onPress={() => void openTeacherWhatsApp(childProfile.teacherPhone)}
+                              style={({ pressed }) => [styles.whatsAppButton, pressed && styles.pressed]}
+                            >
+                              <Text style={styles.whatsAppLabel}>WhatsApp</Text>
+                            </Pressable>
+                          </View>
                         </View>
-                      </View>
-                      <DetailRow label="School" value={school.name} styles={styles} />
-                      <DetailRow label="Address" value={school.address} styles={styles} />
-                      <DetailRow label="Class teacher" value={school.teacher} styles={styles} />
-                      <DetailRow label="Teacher phone" value={school.teacherPhone} styles={styles} />
+                      ))}
+                      <SecondaryButton
+                        label="Add Child"
+                        onPress={openChildModal}
+                        leadingIcon={<Icon name="userplus" size={19} color={theme.colors.primaryInk} />}
+                      />
+                      <Text style={styles.demoNote}>Demo only · Child profiles are kept in local screen state.</Text>
                       <DetailRow label="Caregivers" value={String(mockData.caregivers.length)} styles={styles} />
                       <DetailRow label="Family members" value={String(familyMembers.length)} styles={styles} />
                       <DetailRow label="Approved pickup helpers" value={String(approvedHelpers)} styles={styles} />
@@ -708,6 +847,17 @@ export function ProfileSettings() {
         onClose={closeModal}
         onSave={modalKind === "addAccount" ? addAccount : saveAccountEdit}
         onPickPhoto={choosePhoto}
+        theme={theme}
+        styles={styles}
+      />
+
+      <ChildModal
+        visible={modalKind === "addChild"}
+        draft={childDraft}
+        setDraft={updateChildDraft}
+        error={formError}
+        onClose={closeModal}
+        onSave={addChild}
         theme={theme}
         styles={styles}
       />
@@ -887,6 +1037,117 @@ function AccountModal({
                 onPress={onSave}
               />
               <Text style={styles.modalFootnote}>Demo only · This account is stored in local screen state.</Text>
+            </ScrollView>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+type ChildModalProps = {
+  visible: boolean;
+  draft: ChildDraft;
+  setDraft: (key: keyof ChildDraft, value: string) => void;
+  error: string;
+  onClose: () => void;
+  onSave: () => void;
+  theme: ThemeTokens;
+  styles: ReturnType<typeof makeStyles>;
+};
+
+function ChildModal({
+  visible,
+  draft,
+  setDraft,
+  error,
+  onClose,
+  onSave,
+  theme,
+  styles,
+}: ChildModalProps) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.modalRoot}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <ModalHeader title="Add child" onClose={onClose} styles={styles} />
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <FormField label="Full name" styles={styles}>
+                <TextInput
+                  accessibilityLabel="Child's full name"
+                  autoCapitalize="words"
+                  onChangeText={(value) => setDraft("name", value)}
+                  placeholderTextColor={theme.colors.muted}
+                  style={styles.input}
+                  value={draft.name}
+                />
+              </FormField>
+              <FormField label="Age" styles={styles}>
+                <TextInput
+                  accessibilityLabel="Child's age"
+                  keyboardType="number-pad"
+                  onChangeText={(value) => setDraft("age", value)}
+                  placeholderTextColor={theme.colors.muted}
+                  style={styles.input}
+                  value={draft.age}
+                />
+              </FormField>
+              <FormField label="School name" styles={styles}>
+                <TextInput
+                  accessibilityLabel="School name"
+                  autoCapitalize="words"
+                  onChangeText={(value) => setDraft("schoolName", value)}
+                  placeholderTextColor={theme.colors.muted}
+                  style={styles.input}
+                  value={draft.schoolName}
+                />
+              </FormField>
+              <FormField label="School address" styles={styles}>
+                <TextInput
+                  accessibilityLabel="School address"
+                  autoCapitalize="words"
+                  onChangeText={(value) => setDraft("schoolAddress", value)}
+                  placeholderTextColor={theme.colors.muted}
+                  style={[styles.input, styles.multilineInput]}
+                  value={draft.schoolAddress}
+                  multiline
+                />
+              </FormField>
+              <FormField label="Class / Grade" styles={styles}>
+                <TextInput
+                  accessibilityLabel="Class or grade"
+                  autoCapitalize="words"
+                  onChangeText={(value) => setDraft("className", value)}
+                  placeholderTextColor={theme.colors.muted}
+                  style={styles.input}
+                  value={draft.className}
+                />
+              </FormField>
+              <FormField label="Classroom teacher's name" styles={styles}>
+                <TextInput
+                  accessibilityLabel="Classroom teacher's name"
+                  autoCapitalize="words"
+                  onChangeText={(value) => setDraft("teacherName", value)}
+                  placeholderTextColor={theme.colors.muted}
+                  style={styles.input}
+                  value={draft.teacherName}
+                />
+              </FormField>
+              <FormField label="Classroom teacher's phone number" styles={styles}>
+                <TextInput
+                  accessibilityLabel="Classroom teacher's phone number"
+                  keyboardType="phone-pad"
+                  onChangeText={(value) => setDraft("teacherPhone", value)}
+                  placeholder="+60 12 345 6789"
+                  placeholderTextColor={theme.colors.muted}
+                  style={styles.input}
+                  value={draft.teacherPhone}
+                />
+              </FormField>
+              {error ? <Text accessibilityLiveRegion="polite" style={styles.error}>{error}</Text> : null}
+              <PrimaryButton label="Save child" onPress={onSave} />
+              <Text style={styles.modalFootnote}>Demo only · These child details stay in local screen state.</Text>
             </ScrollView>
           </View>
         </View>
@@ -1286,6 +1547,43 @@ const makeStyles = (theme: ThemeTokens, fontStyle: FontStyle) => {
       gap: theme.spacing.sm,
       paddingBottom: theme.spacing.sm,
     },
+    childCard: {
+      borderWidth: 1,
+      borderColor: theme.colors.line,
+      borderRadius: theme.radius.card,
+      backgroundColor: theme.colors.card,
+      paddingHorizontal: theme.spacing.sm,
+      marginBottom: theme.spacing.sm,
+    },
+    teacherPhoneRow: {
+      minHeight: 58,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: theme.spacing.sm,
+      borderTopWidth: 1,
+      borderTopColor: theme.colors.line,
+    },
+    teacherPhoneText: { flex: 1, minWidth: 0, gap: 3 },
+    teacherPhoneValue: {
+      color: theme.colors.ink,
+      fontFamily,
+      fontSize: theme.type.small * theme.textScale,
+      fontWeight: "700",
+    },
+    whatsAppButton: {
+      minHeight: 38,
+      justifyContent: "center",
+      borderRadius: theme.radius.control,
+      backgroundColor: theme.colors.primarySoft,
+      paddingHorizontal: theme.spacing.sm,
+    },
+    whatsAppLabel: {
+      color: theme.colors.primaryInk,
+      fontFamily,
+      fontSize: theme.type.small * theme.textScale,
+      fontWeight: "800",
+    },
+    multilineInput: { minHeight: 72, paddingTop: theme.spacing.sm, textAlignVertical: "top" },
     signedOutCard: { gap: theme.spacing.sm },
     signedOutTitle: {
       color: theme.colors.ink,
