@@ -117,6 +117,7 @@ export function ProfileSettings() {
     setTextScale,
     selectedCaregiver,
     selectCaregiver,
+    clearCaregiver,
     trustedHelpers,
   } = useAppContext();
   const [accounts, setAccounts] = useState(defaultAccounts);
@@ -124,6 +125,7 @@ export function ProfileSettings() {
     selectedCaregiver?.id ?? defaultAccounts[0].id,
   );
   const [expandedSection, setExpandedSection] = useState<AccordionKey | null>(null);
+  const [isLoggedIn, setIsLoggedIn] = useState(true);
   const [fontStyle, setFontStyle] = useState<FontStyle>("workSans");
   const [showPassword, setShowPassword] = useState(false);
   const [pushNotifications, setPushNotifications] = useState<Record<PushPreferenceKey, boolean>>({
@@ -277,6 +279,7 @@ export function ProfileSettings() {
     setAccounts((current) => [...current, newAccount]);
     setActiveAccountId(newAccount.id);
     selectCaregiver(newAccount);
+    setIsLoggedIn(true);
     setFeedback(`${newAccount.name} added and selected for this demo session.`);
     setModalKind(null);
   };
@@ -284,8 +287,18 @@ export function ProfileSettings() {
   const switchAccount = (account: LocalAccount) => {
     setActiveAccountId(account.id);
     selectCaregiver(account);
+    setIsLoggedIn(true);
     setShowPassword(false);
-    setFeedback(`Switched to ${account.name}.`);
+    setFeedback(`Logged in as ${account.name}.`);
+  };
+
+  const logOut = () => {
+    clearCaregiver();
+    setIsLoggedIn(false);
+    setExpandedSection(null);
+    setShowPassword(false);
+    setNotificationBanner(null);
+    setFeedback("You are logged out. Log in with another account or create a new one.");
   };
 
   const closeModal = () => {
@@ -348,10 +361,11 @@ export function ProfileSettings() {
         </View>
       ) : null}
 
-      <View style={styles.accordionList}>
-        {accordionOptions.map((option) => {
-          const expanded = expandedSection === option.key;
-          return (
+      {isLoggedIn ? (
+        <View style={styles.accordionList}>
+          {accordionOptions.map((option) => {
+            const expanded = expandedSection === option.key;
+            return (
             <Card key={option.key} tight style={styles.accordionCard}>
               <Pressable
                 accessibilityRole="button"
@@ -488,7 +502,7 @@ export function ProfileSettings() {
                                 {option.sample}
                               </Text>
                             </Pressable>
-                          );
+                            );
                         })}
                       </View>
                       <View style={styles.previewCard}>
@@ -638,10 +652,53 @@ export function ProfileSettings() {
               ) : null}
             </Card>
           );
-        })}
-      </View>
+          })}
+        </View>
+      ) : (
+        <Card tight style={styles.signedOutCard}>
+          <Text accessibilityRole="header" style={styles.signedOutTitle}>You are logged out</Text>
+          <Text style={styles.mutedText}>Choose an account to continue or create a new account.</Text>
+          <Text style={styles.subheading}>Log in with another account</Text>
+          {accounts.map((account) => (
+            <Pressable
+              key={account.id}
+              accessibilityRole="button"
+              accessibilityLabel={`Log in as ${account.name}`}
+              onPress={() => switchAccount(account)}
+              style={({ pressed }) => [styles.accountOption, pressed && styles.pressed]}
+            >
+              <Avatar name={account.name} imageUri={account.photoUri ?? undefined} size={38} />
+              <View style={styles.accountOptionText}>
+                <Text style={styles.accountName}>{account.name}</Text>
+                <Text style={styles.mutedText}>{account.role}</Text>
+              </View>
+              <Text style={styles.loginAction}>Log in</Text>
+            </Pressable>
+          ))}
+          <SecondaryButton
+            label="Create New Account"
+            onPress={() => openAccountModal("addAccount")}
+            leadingIcon={<Icon name="userplus" size={19} color={theme.colors.primaryInk} />}
+          />
+          <Text style={styles.demoNote}>Demo only · Account sign-in and creation use local screen state.</Text>
+        </Card>
+      )}
 
-      <Text style={styles.footerNote}>Settings are stored locally for this demo session.</Text>
+      {isLoggedIn ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Log out of account"
+          onPress={logOut}
+          style={({ pressed }) => [styles.logoutButton, pressed && styles.pressed]}
+        >
+          <Icon name="logout" size={20} color={theme.colors.danger} />
+          <Text style={styles.logoutLabel}>Log Out</Text>
+        </Pressable>
+      ) : null}
+
+      <Text style={styles.footerNote}>
+        {isLoggedIn ? "Settings are stored locally for this demo session." : "Your account is signed out on this device."}
+      </Text>
 
       <AccountModal
         kind={modalKind}
@@ -1228,6 +1285,37 @@ const makeStyles = (theme: ThemeTokens, fontStyle: FontStyle) => {
       alignItems: "center",
       gap: theme.spacing.sm,
       paddingBottom: theme.spacing.sm,
+    },
+    signedOutCard: { gap: theme.spacing.sm },
+    signedOutTitle: {
+      color: theme.colors.ink,
+      fontFamily,
+      fontSize: theme.type.body * theme.textScale * 1.1,
+      fontWeight: "800",
+    },
+    loginAction: {
+      color: theme.colors.primaryInk,
+      fontFamily,
+      fontSize: theme.type.small * theme.textScale,
+      fontWeight: "800",
+    },
+    logoutButton: {
+      minHeight: 54,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: theme.spacing.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.danger,
+      borderRadius: theme.radius.control,
+      backgroundColor: theme.colors.dangerSoft,
+      marginTop: theme.spacing.md,
+    },
+    logoutLabel: {
+      color: theme.colors.danger,
+      fontFamily,
+      fontSize: theme.type.body * theme.textScale,
+      fontWeight: "800",
     },
     footerNote: {
       color: theme.colors.muted,
