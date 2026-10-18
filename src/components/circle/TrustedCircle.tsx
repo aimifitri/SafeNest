@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { View } from "react-native";
 
 import { Icon } from "../navigation/Icon";
@@ -15,8 +15,11 @@ import { StatusPill } from "../shared/StatusPill";
 import { setLocalPendingCount } from "../shared/pendingBadge";
 import { mockData } from "../shared/mockData";
 import { useProfileEdits } from "../shared/profileEdits";
-import { Banner, Btn, Chip, Err, Field, Input, Lead, SmallBtn, Press, Rise, T, Tag, useColors } from "../shared/ui";
+import { Banner, Btn, Chip, Err, Field, Input, Lead, Seg, SmallBtn, Press, Rise, T, Tag, useColors } from "../shared/ui";
 import type { FamilyMember, TrustedHelper } from "../shared/types";
+import { InvitationSheet } from "./InvitationSheet";
+import { JoinedCircles } from "./JoinedCircles";
+import { canManageDemoInvitations, circleDemoReducer, createCircleDemoState } from "./circleDemo";
 
 type LocalTrustedHelper = TrustedHelper & { age: number };
 
@@ -31,6 +34,12 @@ type LocalBackupPickupRequest = {
 
 export function TrustedCircle() {
   const { theme, selectedCaregiver, trustedHelpers, setTrustedHelperState } = useAppContext();
+  const [circleTab, setCircleTab] = useState<"my" | "joined">("my");
+  const [invitationOpen, setInvitationOpen] = useState(false);
+  // Single screen-owned model for invitations and joined memberships; no external store.
+  // Resets on screen unmount. Does not alter shared Today/Plan pickup data.
+  const [circleDemo, dispatchCircleDemo] = useReducer(circleDemoReducer, undefined, createCircleDemoState);
+  const canInvite = canManageDemoInvitations(selectedCaregiver);
   const profileEdits = useProfileEdits();
   const colors = theme.colors;
   const [notice, setNotice] = useState("");
@@ -219,8 +228,35 @@ export function TrustedCircle() {
 
   return (
     <AppShell title="Trusted Circle" badge="Circle" activeTab="circle">
+      <Seg<"my" | "joined">
+        cur={circleTab}
+        onPick={(tab) => { setCircleTab(tab); setInvitationOpen(false); }}
+        opts={[
+          { value: "my", label: "MY CIRCLE", a11y: "My Circle" },
+          { value: "joined", label: "JOINED CIRCLES", a11y: "Joined Circles" },
+        ]}
+      />
+      {circleTab === "joined" ? (
+        <JoinedCircles
+          key={`joined-circles:${selectedCaregiver?.id ?? "no-user"}`}
+          memberships={circleDemo.memberships.filter((membership) => membership.userId === selectedCaregiver?.id)}
+          onLeave={(membershipId) => {
+            if (selectedCaregiver) dispatchCircleDemo({ type: "leave", userId: selectedCaregiver.id, membershipId });
+          }}
+        />
+      ) : <>
       <Lead>Who can collect {mockData.child.name}. Tap a name for details.</Lead>
       {notice ? <Banner key={notice} kind="ok">{notice}</Banner> : null}
+
+      {canInvite ? <>
+        <SectionHeading title="Family invitations" />
+        <Card style={{ gap: 10 }}>
+          <T w={700}>Invite someone to your circle</T>
+          <T c="muted">Preview a nonfunctional demo invitation and act out acceptance followed by administrator approval.</T>
+          <Btn kind="s" icon="userplus" onPress={() => setInvitationOpen(true)}>Open demo invitation</Btn>
+          <T s={0.8} c="muted">Administrator demo controls only. This visibility check is not server authorization.</T>
+        </Card>
+      </> : null}
 
       {pendingHelpers.length > 0 ? (
         <>
@@ -416,6 +452,18 @@ export function TrustedCircle() {
         </View>
         <PrimaryButton label="Done" onPress={() => setApprovalNoticeVisible(false)} />
       </Sheet>
+      </>}
+      <T s={0.8} c="muted" lh={1.4}>Invitation previews and Joined Circles are fictional local demos. Their changes survive these two tabs, but reset when Trusted Circle unmounts. No real invitations, memberships or pickup permissions are created.</T>
+      <InvitationSheet
+        key={`invitation-sheet:${selectedCaregiver?.id ?? "no-user"}`}
+        visible={circleTab === "my" && invitationOpen && canInvite}
+        onClose={() => setInvitationOpen(false)}
+        actor={selectedCaregiver}
+        state={circleDemo}
+        onGenerate={() => { if (selectedCaregiver) dispatchCircleDemo({ type: "generate", actor: selectedCaregiver }); }}
+        onAccept={() => { if (selectedCaregiver) dispatchCircleDemo({ type: "accept", actor: selectedCaregiver }); }}
+        onApprove={() => { if (selectedCaregiver) dispatchCircleDemo({ type: "approve", actor: selectedCaregiver }); }}
+      />
     </AppShell>
   );
 
