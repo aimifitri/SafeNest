@@ -62,7 +62,7 @@ export function InvitationSheet({ visible, onClose, actor, state, onGenerate, on
   };
   return (
     <Sheet visible={visible} onClose={onClose} title="Demo invitation" closeLabel="Close demo invitation">
-      <Banner>Simulation only. No valid link, token or invitation is created. These controls do not authorize anyone.</Banner>
+      <Banner>Simulation as Abu, a fictional family administrator. Your signed-in account's permissions are unchanged. No valid link, token or invitation is created.</Banner>
       <T lh={1.45}>An administrator creates an invitation. A helper accepts, then waits for administrator approval. Only approved helpers may eventually receive pickup requests.</T>
       {!state.invitation ? <Btn kind="p" icon="plus" onPress={onGenerate}>Generate demo invitation preview</Btn> : (
         <>
@@ -80,7 +80,7 @@ export function InvitationSheet({ visible, onClose, actor, state, onGenerate, on
             <T w={700}>Workflow preview for {membership.userName} (demo user)</T>
             <T s={0.9}>{membership.familyName} · {membership.role}</T>
             <StatusPill label={membershipLabels[membership.status]} tone={membership.status === "approved" ? "success" : "warning"} />
-            <T s={0.9} c="muted">{membership.status === "pending" ? "Invitation preview created. Acceptance has not been simulated." : membership.status === "awaitingApproval" ? "Acceptance simulated. Awaiting the family administrator's approval." : "Approval simulated. This family's entry is now Approved in this user's local Joined Circles data."}</T>
+            <T s={0.9} c="muted">{membership.status === "pending" ? "Invitation preview created. Acceptance has not been simulated." : membership.status === "awaitingApproval" ? "Acceptance simulated. Awaiting the fictional family administrator's approval." : membership.status === "revoked" ? "This fictional membership was revoked or left. No pickup permission is enabled." : "Approval simulated. Switch the demo persona to Siti, then open Joined Circles to inspect it."}</T>
             {state.invitation.status === "preview" ? <Btn kind="dash" onPress={onAccept}>Simulate {membership.userName} accepting</Btn> : null}
             {state.invitation.status === "accepted" ? <Btn kind="p" onPress={onApprove}>Simulate administrator approval</Btn> : null}
             {membership.status === "approved" ? <Banner>Helper's Joined Circles preview: {membership.familyName} — Approved. This is the same local membership record used by Joined Circles.</Banner> : null}
@@ -91,7 +91,7 @@ export function InvitationSheet({ visible, onClose, actor, state, onGenerate, on
       {busy ? <T c="muted">Waiting for the platform copy or share action...</T> : null}
       {feedback ? <Banner>{feedback}</Banner> : null}
       <Err text={error} />
-      <T s={0.82} c="muted">All new Circle demo changes reset when Trusted Circle unmounts. Sharing this preview cannot join a family.</T>
+      <T s={0.82} c="muted">Invitation and membership changes survive fictional persona changes but reset on authenticated account change or screen remount. Sharing this preview cannot join a family.</T>
     </Sheet>
   );
 }

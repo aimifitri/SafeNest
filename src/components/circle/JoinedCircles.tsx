@@ -9,9 +9,10 @@ import { Banner, Btn, Dl, Press, T } from "../shared/ui";
 import { canLeaveDemoCircle, isDemoPickupEligible, membershipLabels } from "./circleDemo";
 import type { DemoMembership } from "./circleDemo";
 
-export function JoinedCircles({ memberships, onLeave }: {
+export function JoinedCircles({ memberships, onLeave, personaName }: {
   memberships: DemoMembership[];
   onLeave: (membershipId: string) => void;
+  personaName: string;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [confirmLeave, setConfirmLeave] = useState(false);
@@ -20,7 +21,7 @@ export function JoinedCircles({ memberships, onLeave }: {
   const close = () => { setSelectedId(null); setConfirmLeave(false); };
   return (
     <>
-      <Banner>Fictional memberships for the selected demo user. No child details or locations are shared here.</Banner>
+      <Banner>Fictional memberships for {personaName}, the selected demo persona. These do not belong to your signed-in account. No child details or locations are shared here.</Banner>
       {notice ? <Banner>{notice}</Banner> : null}
       {memberships.length === 0 ? <Card style={{ gap: 8 }}>
         <T w={800}>No joined circles yet</T>

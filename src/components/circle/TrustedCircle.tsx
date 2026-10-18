@@ -19,7 +19,8 @@ import { Banner, Btn, Chip, Err, Field, Input, Lead, Seg, SmallBtn, Press, Rise,
 import type { FamilyMember, TrustedHelper } from "../shared/types";
 import { InvitationSheet } from "./InvitationSheet";
 import { JoinedCircles } from "./JoinedCircles";
-import { canManageDemoInvitations, circleDemoReducer, createCircleDemoState } from "./circleDemo";
+import { canManageDemoInvitations, circleDemoReducer, createCircleDemoState, DEMO_PERSONAS } from "./circleDemo";
+import type { DemoActor } from "./circleDemo";
 
 type LocalTrustedHelper = TrustedHelper & { age: number };
 
@@ -33,13 +34,21 @@ type LocalBackupPickupRequest = {
 
 
 export function TrustedCircle() {
-  const { theme, selectedCaregiver, trustedHelpers, setTrustedHelperState } = useAppContext();
+  const { selectedCaregiver } = useAppContext();
+  // Auth identity scopes the component lifetime only; it is never a fictional membership ID.
+  return <CircleDemoScreen key={`circle-demo-session:${selectedCaregiver?.id ?? "signed-out"}`} />;
+}
+
+function CircleDemoScreen() {
+  const { theme, trustedHelpers, setTrustedHelperState } = useAppContext();
+  const [personaId, setPersonaId] = useState<DemoActor["id"]>("abu");
+  const demoActor = DEMO_PERSONAS.find((persona) => persona.id === personaId) ?? DEMO_PERSONAS[0];
   const [circleTab, setCircleTab] = useState<"my" | "joined">("my");
   const [invitationOpen, setInvitationOpen] = useState(false);
   // Single screen-owned model for invitations and joined memberships; no external store.
   // Resets on screen unmount. Does not alter shared Today/Plan pickup data.
   const [circleDemo, dispatchCircleDemo] = useReducer(circleDemoReducer, undefined, createCircleDemoState);
-  const canInvite = canManageDemoInvitations(selectedCaregiver);
+  const canInvite = canManageDemoInvitations(demoActor);
   const profileEdits = useProfileEdits();
   const colors = theme.colors;
   const [notice, setNotice] = useState("");
@@ -92,7 +101,7 @@ export function TrustedCircle() {
     ...localHelpers.filter((helper) => helper.state === "pending"),
   ];
   const familyMembers = mockData.familyMembers;
-  const accountOwner = selectedCaregiver ?? mockData.caregivers[0];
+  const accountOwner = mockData.caregivers.find((caregiver) => caregiver.id === demoActor.id) ?? mockData.caregivers[0];
   const primaryHelpers = approvedHelpers.filter((helper) => primaryContactIds[helper.id]);
   const regularHelpers = approvedHelpers.filter((helper) => !primaryContactIds[helper.id]);
   const availableHelpers = approvedHelpers.filter((helper) => availability[helper.id] ?? false);
@@ -228,6 +237,21 @@ export function TrustedCircle() {
 
   return (
     <AppShell title="Trusted Circle" badge="Circle" activeTab="circle">
+      <Banner>Fictional Circle demo. All family, child, member, availability and pickup details here are demonstration data. Your signed-in account stays unchanged; a demo administrator has no real database permissions.</Banner>
+      <SectionHeading title="Fictional demo persona" />
+      <Seg<DemoActor["id"]>
+        cur={personaId}
+        onPick={(id) => {
+          setPersonaId(id);
+          setInvitationOpen(false);
+          closeAddModal();
+          setTimePickerPurpose(null);
+          setApprovalNoticeVisible(false);
+          setNotice("");
+        }}
+        opts={DEMO_PERSONAS.map((persona) => ({ value: persona.id, label: persona.label, a11y: `Preview as ${persona.name}, fictional ${persona.isAdmin ? "administrator" : "helper"}` }))}
+      />
+      <T s={0.85} c="muted">Generate and approve as Abu. Switch to Siti to inspect the same invitation membership in Joined Circles. This selector acts out fictional roles; it does not switch your authenticated account.</T>
       <Seg<"my" | "joined">
         cur={circleTab}
         onPick={(tab) => { setCircleTab(tab); setInvitationOpen(false); }}
@@ -238,10 +262,11 @@ export function TrustedCircle() {
       />
       {circleTab === "joined" ? (
         <JoinedCircles
-          key={`joined-circles:${selectedCaregiver?.id ?? "no-user"}`}
-          memberships={circleDemo.memberships.filter((membership) => membership.userId === selectedCaregiver?.id)}
+          key={`joined-circles:${demoActor.id}`}
+          personaName={demoActor.name}
+          memberships={circleDemo.memberships.filter((membership) => membership.userId === demoActor.id)}
           onLeave={(membershipId) => {
-            if (selectedCaregiver) dispatchCircleDemo({ type: "leave", userId: selectedCaregiver.id, membershipId });
+            dispatchCircleDemo({ type: "leave", userId: demoActor.id, membershipId });
           }}
         />
       ) : <>
@@ -254,7 +279,7 @@ export function TrustedCircle() {
           <T w={700}>Invite someone to your circle</T>
           <T c="muted">Preview a nonfunctional demo invitation and act out acceptance followed by administrator approval.</T>
           <Btn kind="s" icon="userplus" onPress={() => setInvitationOpen(true)}>Open demo invitation</Btn>
-          <T s={0.8} c="muted">Administrator demo controls only. This visibility check is not server authorization.</T>
+          <T s={0.8} c="muted">Abu's fictional administrator controls only. These do not represent your signed-in account's role or server authorization.</T>
         </Card>
       </> : null}
 
@@ -453,16 +478,16 @@ export function TrustedCircle() {
         <PrimaryButton label="Done" onPress={() => setApprovalNoticeVisible(false)} />
       </Sheet>
       </>}
-      <T s={0.8} c="muted" lh={1.4}>Invitation previews and Joined Circles are fictional local demos. Their changes survive these two tabs, but reset when Trusted Circle unmounts. No real invitations, memberships or pickup permissions are created.</T>
+      <T s={0.8} c="muted" lh={1.4}>Invitation previews and Joined Circles survive tab and fictional persona changes, but reset on account change or screen remount. Other Circle-local forms and broadcast state also reset. Existing shared sample helper approvals remain in AppContext for this app session. No real invitations, memberships or pickup permissions are created.</T>
       <InvitationSheet
-        key={`invitation-sheet:${selectedCaregiver?.id ?? "no-user"}`}
+        key={`invitation-sheet:${demoActor.id}`}
         visible={circleTab === "my" && invitationOpen && canInvite}
         onClose={() => setInvitationOpen(false)}
-        actor={selectedCaregiver}
+        actor={demoActor}
         state={circleDemo}
-        onGenerate={() => { if (selectedCaregiver) dispatchCircleDemo({ type: "generate", actor: selectedCaregiver }); }}
-        onAccept={() => { if (selectedCaregiver) dispatchCircleDemo({ type: "accept", actor: selectedCaregiver }); }}
-        onApprove={() => { if (selectedCaregiver) dispatchCircleDemo({ type: "approve", actor: selectedCaregiver }); }}
+        onGenerate={() => dispatchCircleDemo({ type: "generate", actor: demoActor })}
+        onAccept={() => dispatchCircleDemo({ type: "accept", actor: demoActor })}
+        onApprove={() => dispatchCircleDemo({ type: "approve", actor: demoActor })}
       />
     </AppShell>
   );

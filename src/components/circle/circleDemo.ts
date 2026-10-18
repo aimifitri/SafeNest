@@ -2,7 +2,12 @@
 // State survives the two Circle tabs, but resets when TrustedCircle unmounts.
 export type MembershipStatus = "pending" | "awaitingApproval" | "approved" | "revoked";
 export type InvitationStatus = "preview" | "accepted" | "approved" | "revoked";
-export type DemoActor = { id: string; isAdmin: boolean };
+// Explicit fictional actors; authenticated users must never be passed as demo actors.
+export type DemoActor = { id: "abu" | "siti"; isAdmin: boolean; demo: true };
+export const DEMO_PERSONAS: ReadonlyArray<DemoActor & { name: string; label: string }> = [
+  { id: "abu", name: "Abu", label: "Abu · Demo admin", isAdmin: true, demo: true },
+  { id: "siti", name: "Siti", label: "Siti · Demo helper", isAdmin: false, demo: true },
+];
 export type DemoMembership = {
   id: string;
   familyId: string;
@@ -26,7 +31,7 @@ export type CircleDemoState = {
 export const DEMO_FAMILY = {
   id: "demo-safenest-family",
   name: "SafeNest Sample Family",
-  adminUserIds: ["abu", "siti"],
+  adminUserIds: ["abu"],
 };
 export const membershipLabels: Record<MembershipStatus, string> = {
   pending: "Pending",
@@ -35,7 +40,7 @@ export const membershipLabels: Record<MembershipStatus, string> = {
   revoked: "Revoked",
 };
 export function canManageDemoInvitations(actor: DemoActor | null): boolean {
-  return !!actor?.isAdmin && DEMO_FAMILY.adminUserIds.includes(actor.id);
+  return actor?.demo === true && actor.isAdmin && DEMO_FAMILY.adminUserIds.includes(actor.id);
 }
 export function canLeaveDemoCircle(membership: DemoMembership): boolean {
   return membership.status !== "revoked";
@@ -48,7 +53,7 @@ export function createCircleDemoState(): CircleDemoState {
   const names = ["Fern", "Orchid", "Cedar", "Willow"];
   return {
     invitation: null,
-    // Abu has four examples; Siti and newly added accounts have an empty state.
+    // Abu has four examples; Siti is empty until the fictional invitation is generated.
     memberships: statuses.map((status, index) => ({
       id: `demo-membership-${index}`,
       familyId: `demo-family-${index}`,
@@ -87,7 +92,7 @@ export function circleDemoReducer(state: CircleDemoState, action: CircleDemoActi
   if (!canManageDemoInvitations(action.actor)) return state;
   if (action.type === "generate") {
     if (state.invitation) return state;
-    const otherUser = action.actor.id === "abu" ? { id: "siti", name: "Siti" } : { id: "abu", name: "Abu" };
+    const otherUser = DEMO_PERSONAS[1];
     return {
       ...state,
       invitation: { familyId: DEMO_FAMILY.id, targetUserId: otherUser.id, targetUserName: otherUser.name, status: "preview" },
