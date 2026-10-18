@@ -19,6 +19,7 @@ import { Banner, Btn, Chip, Err, Field, Input, Lead, Seg, SmallBtn, Press, Rise,
 import type { FamilyMember, TrustedHelper } from "../shared/types";
 import { InvitationSheet } from "./InvitationSheet";
 import { JoinedCircles } from "./JoinedCircles";
+import { AccountJoinedCircles } from "./AccountJoinedCircles";
 import { canManageDemoInvitations, circleDemoReducer, createCircleDemoState, DEMO_PERSONAS } from "./circleDemo";
 import type { DemoActor } from "./circleDemo";
 
@@ -237,7 +238,7 @@ function CircleDemoScreen() {
 
   return (
     <AppShell title="Trusted Circle" badge="Circle" activeTab="circle">
-      <Banner>Fictional Circle demo. All family, child, member, availability and pickup details here are demonstration data. Your signed-in account stays unchanged; a demo administrator has no real database permissions.</Banner>
+      <Banner>Joined Circles includes memberships from your signed-in account. My Circle and all fictional persona, invitation, approval, leave, availability and pickup controls remain Demo data. Demo actions do not change your account.</Banner>
       <SectionHeading title="Fictional demo persona" />
       <Seg<DemoActor["id"]>
         cur={personaId}
@@ -251,7 +252,7 @@ function CircleDemoScreen() {
         }}
         opts={DEMO_PERSONAS.map((persona) => ({ value: persona.id, label: persona.label, a11y: `Preview as ${persona.name}, fictional ${persona.isAdmin ? "administrator" : "helper"}` }))}
       />
-      <T s={0.85} c="muted">Generate and approve as Abu. Switch to Siti to inspect the same invitation membership in Joined Circles. This selector acts out fictional roles; it does not switch your authenticated account.</T>
+      <T s={0.85} c="muted">Generate and approve as Abu. Switch to Siti to inspect the same invitation membership in Demo joined circles. This selector acts out fictional roles; it does not switch your authenticated account or change your account's joined circles.</T>
       <Seg<"my" | "joined">
         cur={circleTab}
         onPick={(tab) => { setCircleTab(tab); setInvitationOpen(false); }}
@@ -261,6 +262,10 @@ function CircleDemoScreen() {
         ]}
       />
       {circleTab === "joined" ? (
+        <>
+        <SectionHeading title="Your account's joined circles" />
+        <AccountJoinedCircles />
+        <SectionHeading title="Demo joined circles" />
         <JoinedCircles
           key={`joined-circles:${demoActor.id}`}
           personaName={demoActor.name}
@@ -269,6 +274,7 @@ function CircleDemoScreen() {
             dispatchCircleDemo({ type: "leave", userId: demoActor.id, membershipId });
           }}
         />
+        </>
       ) : <>
       <Lead>Who can collect {mockData.child.name}. Tap a name for details.</Lead>
       {notice ? <Banner key={notice} kind="ok">{notice}</Banner> : null}
