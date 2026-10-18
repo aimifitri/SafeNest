@@ -5,7 +5,6 @@ import { Avatar } from "../shared/Avatar";
 import { useAppContext } from "../shared/AppContext";
 import { Card } from "../shared/Card";
 import { SectionHeading } from "../shared/SectionHeading";
-import { mockData } from "../shared/mockData";
 import { Disclosure } from "../shared/Disclosure";
 import { Sheet } from "../shared/Sheet";
 import { isValidEmail, isValidPhone, saveProfileEdit, useProfileEdits } from "../shared/profileEdits";
@@ -15,28 +14,30 @@ export function CaregiverProfileSection() {
   const { theme, selectedCaregiver } = useAppContext();
   const c = theme.colors;
   const edits = useProfileEdits();
-  const base = selectedCaregiver ?? mockData.caregivers[0];
-  const caregiver = { ...base, ...edits[base.id] };
-  const otherBase = mockData.caregivers.find((person) => person.id !== base.id);
-  const emergencyContact = otherBase ? { ...otherBase, ...edits[otherBase.id] } : undefined;
+  const base = selectedCaregiver;
+  const caregiver = base ? { ...base, ...edits[base.id] } : null;
   const [editing, setEditing] = useState(false);
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
   const openEdit = () => {
+    if (!caregiver) return;
     setPhone(caregiver.phone);
     setEmail(caregiver.email);
     setError("");
     setEditing(true);
   };
   const save = () => {
+    if (!base) return;
     if (!isValidPhone(phone)) return setError("Enter a phone number with digits, for example +60 12-345 6789.");
     if (!isValidEmail(email)) return setError("Enter an email address like name@example.com.");
     saveProfileEdit(base.id, { phone: phone.trim(), email: email.trim() });
     setEditing(false);
     setSaved("Contact details updated for this demo session.");
   };
+
+  if (!base || !caregiver) return null;
   
   return (
     <>
@@ -54,26 +55,12 @@ export function CaregiverProfileSection() {
         <View style={{ marginTop: 10, gap: 10 }}>
           {saved ? <Banner key={saved} kind="ok">{saved}</Banner> : null}
           <Btn kind="s" sm icon="me" onPress={openEdit} label="Edit contact details">Edit contact details</Btn>
-          <T s={0.78} lh={1.4} c="muted">Fictional demo profile · Changes stay in app memory for this session. No account is changed.</T>
+          <T s={0.78} lh={1.4} c="muted">Contact edits stay in app memory and are not saved to your account.</T>
         </View>
       </Card>
 
-      <Disclosure title="Emergency contact" sub={emergencyContact ? `${emergencyContact.name}, ${emergencyContact.role}` : "None listed"}>
-        {emergencyContact ? (
-          <>
-            <Row first style={{ paddingTop: 0, paddingBottom: 6 }}>
-              <Avatar name={emergencyContact.name} size={44} />
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <T w={700}>{emergencyContact.name}</T>
-                <T s={0.84} c="muted" lh={1.35}>{emergencyContact.role}</T>
-              </View>
-            </Row>
-            <Dl k="Phone" v={emergencyContact.phone} />
-            <Dl k="Email" v={emergencyContact.email} />
-          </>
-        ) : (
-          <T s={0.88} c="muted">No emergency contact is listed in the demo profiles.</T>
-        )}
+      <Disclosure title="Emergency contact" sub="None listed">
+        <T s={0.88} c="muted">No emergency contact is listed.</T>
       </Disclosure>
 
       <Sheet visible={editing} onClose={() => setEditing(false)} title="Edit contact details" closeLabel="Close edit contact details">

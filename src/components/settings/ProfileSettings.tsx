@@ -6,6 +6,7 @@ import { Image, Linking, Text, View } from "react-native";
 import Animated from "react-native-reanimated";
 
 import { Icon } from "../navigation/Icon";
+import { useAuth } from "../shared/AuthContext";
 import { useAppContext } from "../shared/AppContext";
 import { AppShell } from "../shared/AppShell";
 import { Avatar } from "../shared/Avatar";
@@ -59,6 +60,7 @@ type ModalKind = "addAccount" | "editAccount" | "addChild" | "forgotPassword" | 
 type PhotoTarget = "active" | "new" | "edit";
 type PushPreferenceKey = "pickupReminder" | "helperAvailability" | "systemAlerts";
 type PasskeyMethod = "devicePin" | "faceId" | "fingerprint";
+const showDemoAccountOptions = false;
 
 type ChildProfile = {
   id: string;
@@ -153,13 +155,8 @@ const accordionOptions: { key: AccordionKey; title: string; icon: string }[] = [
   { key: "privacy", title: "Privacy", icon: "lock" },
 ];
 
-const defaultAccounts: LocalAccount[] = mockData.caregivers.map((caregiver) => ({
-  ...caregiver,
-  password: "demo-password",
-  photoUri: null,
-}));
-
 export function ProfileSettings() {
+  const { signOut } = useAuth();
   const {
     theme,
     themeMode,
@@ -173,10 +170,12 @@ export function ProfileSettings() {
     clearCaregiver,
     trustedHelpers,
   } = useAppContext();
-  const [accounts, setAccounts] = useState(defaultAccounts);
-  const [activeAccountId, setActiveAccountId] = useState(
-    selectedCaregiver?.id ?? defaultAccounts[0].id,
-  );
+  const [accounts, setAccounts] = useState<LocalAccount[]>(() => (
+    selectedCaregiver
+      ? [{ ...selectedCaregiver, password: "", photoUri: null }]
+      : []
+  ));
+  const [activeAccountId, setActiveAccountId] = useState(selectedCaregiver?.id ?? "");
   // Settings home (null) or one sub-page, like the prototype's settings pages.
   const [page, setPage] = useState<AccordionKey | null>(null);
   // True right after going back, so the home page slides in from the left.
@@ -210,17 +209,37 @@ export function ProfileSettings() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
-  const activeAccount = accounts.find((account) => account.id === activeAccountId)
-    ?? accounts[0];
+  const accountState = selectedCaregiver?.id === activeAccountId
+    ? accounts.find((account) => account.id === activeAccountId)
+    : undefined;
+  const activeAccount: LocalAccount = selectedCaregiver
+    ? {
+        ...selectedCaregiver,
+        password: accountState?.password ?? "",
+        photoUri: accountState?.photoUri ?? null,
+      }
+    : {
+        id: "",
+        name: "",
+        role: "",
+        email: "",
+        phone: "",
+        isAdmin: false,
+        password: "",
+        photoUri: null,
+      };
   const c = theme.colors;
   const approvedHelpers = trustedHelpers.filter((helper) => helper.state === "active").length;
   const { familyMembers } = mockData;
 
   useEffect(() => {
-    if (selectedCaregiver && accounts.some((account) => account.id === selectedCaregiver.id)) {
+    if (selectedCaregiver) {
       setActiveAccountId(selectedCaregiver.id);
+      setAccounts((current) => current.some((account) => account.id === selectedCaregiver.id)
+        ? current
+        : [...current, { ...selectedCaregiver, password: "", photoUri: null }]);
     }
-  }, [accounts, selectedCaregiver]);
+  }, [selectedCaregiver]);
 
   // Confirmations are brief: they show for a few seconds, then clear so they do not follow you onto every page.
   useEffect(() => {
@@ -429,6 +448,7 @@ export function ProfileSettings() {
   };
 
   const logOut = () => {
+    void signOut();
     clearCaregiver();
     setIsLoggedIn(false);
     setPage(null);
@@ -532,29 +552,33 @@ export function ProfileSettings() {
         <>
           <Card>
             <T s={1.15} w={800} lh={1.3}>You are logged out</T>
-            <View style={{ marginTop: 4 }}><T s={0.92} c="muted" lh={1.4}>Choose an account to continue or create a new account.</T></View>
+            <View style={{ marginTop: 4 }}><T s={0.92} c="muted" lh={1.4}>Log in with the account you want to use.</T></View>
           </Card>
-          <SectionHeading title="Log in with another account" />
-          <Card tight>
-            {accounts.map((account, index) => (
-              <Press
-                key={account.id}
-                onPress={() => switchAccount(account)}
-                label={`Log in as ${account.name}`}
-                scaleTo={0.985}
-                style={{ flexDirection: "row", alignItems: "center", gap: 12, minHeight: 64, paddingVertical: 10, borderTopWidth: index === 0 ? 0 : 1, borderTopColor: c.line }}
-              >
-                <Avatar name={account.name} imageUri={account.photoUri ?? undefined} size={40} />
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <T w={700}>{account.name}</T>
-                  <T s={0.84} c="muted">{account.role}</T>
-                </View>
-                <T s={0.9} w={700} c={c.primaryInk}>Log in</T>
-              </Press>
-            ))}
-          </Card>
-          <Btn kind="s" icon="userplus" onPress={() => openAccountModal("addAccount")}>Create new account</Btn>
-          <Note>Demo only · Account sign-in and creation use local screen state.</Note>
+          {showDemoAccountOptions ? (
+            <>
+              <SectionHeading title="Log in with another account" />
+              <Card tight>
+                {accounts.map((account, index) => (
+                  <Press
+                    key={account.id}
+                    onPress={() => switchAccount(account)}
+                    label={`Log in as ${account.name}`}
+                    scaleTo={0.985}
+                    style={{ flexDirection: "row", alignItems: "center", gap: 12, minHeight: 64, paddingVertical: 10, borderTopWidth: index === 0 ? 0 : 1, borderTopColor: c.line }}
+                  >
+                    <Avatar name={account.name} imageUri={account.photoUri ?? undefined} size={40} />
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <T w={700}>{account.name}</T>
+                      <T s={0.84} c="muted">{account.role}</T>
+                    </View>
+                    <T s={0.9} w={700} c={c.primaryInk}>Log in</T>
+                  </Press>
+                ))}
+              </Card>
+              <Btn kind="s" icon="userplus" onPress={() => openAccountModal("addAccount")}>Create new account</Btn>
+              <Note>Demo only · Account sign-in and creation use local screen state.</Note>
+            </>
+          ) : null}
         </>
       ) : page === null ? (
         <Page key="home" motion={motion}>
@@ -648,25 +672,29 @@ export function ProfileSettings() {
               <Btn kind="p" icon="me" onPress={() => openAccountModal("editAccount")}>Edit account details</Btn>
               <Btn kind="o" icon="key" onPress={() => { setPinSent(false); setModalKind("forgotPassword"); }}>Forgot password?</Btn>
 
-              <SectionHeading title="Switch account" />
-              <Card tight style={{ paddingHorizontal: 4 }}>
-                {accounts.map((account, index) => {
-                  const on = account.id === activeAccount.id;
-                  return (
-                    <LRow key={account.id} first={index === 0} on={on} a11y={`${account.name}, ${account.role}${on ? ", active" : ""}`} onPress={() => switchAccount(account)}>
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                        <Avatar name={account.name} imageUri={account.photoUri ?? undefined} size={40} />
-                        <View style={{ flex: 1, minWidth: 0 }}>
-                          <T w={on ? 800 : 700} c={on ? c.primaryInk : "ink"}>{account.name}</T>
-                          <T s={0.84} c="muted">{account.role}</T>
-                        </View>
-                      </View>
-                    </LRow>
-                  );
-                })}
-              </Card>
-              <Btn kind="dash" icon="userplus" onPress={() => openAccountModal("addAccount")}>Add account</Btn>
-              <Note>Demo only · Account changes stay in app memory. No account is authenticated.</Note>
+              {showDemoAccountOptions ? (
+                <>
+                  <SectionHeading title="Switch account" />
+                  <Card tight style={{ paddingHorizontal: 4 }}>
+                    {accounts.map((account, index) => {
+                      const on = account.id === activeAccount.id;
+                      return (
+                        <LRow key={account.id} first={index === 0} on={on} a11y={`${account.name}, ${account.role}${on ? ", active" : ""}`} onPress={() => switchAccount(account)}>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                            <Avatar name={account.name} imageUri={account.photoUri ?? undefined} size={40} />
+                            <View style={{ flex: 1, minWidth: 0 }}>
+                              <T w={on ? 800 : 700} c={on ? c.primaryInk : "ink"}>{account.name}</T>
+                              <T s={0.84} c="muted">{account.role}</T>
+                            </View>
+                          </View>
+                        </LRow>
+                      );
+                    })}
+                  </Card>
+                  <Btn kind="dash" icon="userplus" onPress={() => openAccountModal("addAccount")}>Add account</Btn>
+                  <Note>Demo only · Account changes stay in app memory. No account is authenticated.</Note>
+                </>
+              ) : null}
             </>
           ) : null}
 
