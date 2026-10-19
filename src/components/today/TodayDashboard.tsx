@@ -1,20 +1,21 @@
 import { Link } from "expo-router";
+import type { ReactNode } from "react";
 import { useRef, useState } from "react";
 import { Image, View, useWindowDimensions } from "react-native";
-import type { ReactNode } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Icon } from "../navigation/Icon";
-import { AppShell } from "../shared/AppShell";
 import { useAppContext } from "../shared/AppContext";
+import { AppShell } from "../shared/AppShell";
 import { Card } from "../shared/Card";
-import { MapView } from "../shared/MapView";
-import type { MapDot } from "../shared/MapView";
-import { StatusPill } from "../shared/StatusPill";
-import { DemoSheet, FullMap } from "./DemoControls";
 import { scenarios, useScenarioKey } from "../shared/demoScenario";
-import { Btn, Glass, Press, Rise, SIc, T, useColors, useEffectiveScale, useTone } from "../shared/ui";
+import type { MapDot } from "../shared/MapView";
+import { MapView } from "../shared/MapView";
 import { mockData } from "../shared/mockData";
+import { StatusPill } from "../shared/StatusPill";
+import { Btn, Glass, Press, Rise, SIc, T, useColors, useEffectiveScale, useTone } from "../shared/ui";
+import { DemoSheet, FullMap } from "./DemoControls";
+import { DeviceLocationModal } from "./DeviceLocation";
 
 const LOGO = require("../../../assets/images/logo.png");
 
@@ -48,6 +49,7 @@ export function TodayDashboard() {
   const pickupStatus = scenario ? { ...basePickupStatus, ...scenario } : basePickupStatus;
   const [demoOpen, setDemoOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
+  const [locationOpen, setLocationOpen] = useState(false);
   const status = pickupStatus.state;
   const isLate = status === "late" && backupRequest.state !== "accepted";
   const atSchool = pickupStatus.currentPlace === "school";
@@ -137,7 +139,7 @@ export function TodayDashboard() {
       title="SafeNest"
       badge="Today"
       activeTab="home"
-      header={<TodayMap dots={dots} trail={isArrived} onDemo={() => setDemoOpen(true)} onExpand={() => setMapOpen(true)} />}
+      header={<TodayMap dots={dots} trail={isArrived} onDemo={() => setDemoOpen(true)} onExpand={() => setMapOpen(true)} onLocation={() => setLocationOpen(true)} />}
     >
       <Rise i={0} style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", rowGap: 8, columnGap: 12 }}>
         <View style={{ flexGrow: 1, flexShrink: 1, flexBasis: 140, minWidth: 0 }}>
@@ -197,6 +199,7 @@ export function TodayDashboard() {
       </Rise>
       <DemoSheet visible={demoOpen} onClose={() => setDemoOpen(false)} />
       <FullMap visible={mapOpen} onClose={() => setMapOpen(false)} dots={dots} trail={isArrived} />
+      <DeviceLocationModal visible={locationOpen} onClose={() => setLocationOpen(false)} />
     </AppShell>
   );
 }
@@ -236,7 +239,7 @@ function NavRow({ href, icon, title, sub, first }: { href: "/plan" | "/circle"; 
 }
 
 /** Full-bleed illustrated map with the frosted overlay chips. */
-function TodayMap({ dots, trail, onDemo, onExpand }: { dots: MapDot[]; trail: boolean; onDemo: () => void; onExpand: () => void }) {
+function TodayMap({ dots, trail, onDemo, onExpand, onLocation }: { dots: MapDot[]; trail: boolean; onDemo: () => void; onExpand: () => void; onLocation: () => void }) {
   const c = useColors();
   const insets = useSafeAreaInsets();
   const { height: winH } = useWindowDimensions();
@@ -257,18 +260,26 @@ function TodayMap({ dots, trail, onDemo, onExpand }: { dots: MapDot[]; trail: bo
           </Glass>
         </Press>
       </View>
-      <View pointerEvents="box-none" style={{ position: "absolute", left: 16, right: 16, bottom: 36, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+      <View pointerEvents="box-none" style={{ position: "absolute", left: 16, right: 16, bottom: 36, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <View pointerEvents="none">
           <Glass style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, height: 34 }}>
             <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: c.trail }} />
             <T s={0.8} w={600} c="muted">Simulated map</T>
           </Glass>
         </View>
-        <Press onPress={onExpand} label="Open full screen map" style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-          <Glass style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center", paddingHorizontal: 0 }}>
-            <Icon name="expand" size={18} color={c.primaryInk} stroke={2} />
-          </Glass>
-        </Press>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <Press onPress={onLocation} label="Open this phone's live location" style={{ minHeight: 44, justifyContent: "center" }}>
+            <Glass style={{ height: 38, flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10 }}>
+              <Icon name="look" size={16} color={c.primaryInk} stroke={2} />
+              <T s={0.78} w={700} c={c.primaryInk}>My GPS</T>
+            </Glass>
+          </Press>
+          <Press onPress={onExpand} label="Open full screen simulated map" style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
+            <Glass style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center", paddingHorizontal: 0 }}>
+              <Icon name="expand" size={18} color={c.primaryInk} stroke={2} />
+            </Glass>
+          </Press>
+        </View>
       </View>
     </View>
   );
