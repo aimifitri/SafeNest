@@ -22,7 +22,7 @@ function initialRegion({ point, destination }: DeviceLocationMapProps): Region {
     : { latitude: 0, longitude: 0, latitudeDelta: 30, longitudeDelta: 30 };
 }
 
-export function DeviceLocationMap({ point, destination, onSelectDestination }: DeviceLocationMapProps) {
+export function DeviceLocationMap({ point, destination, destinationTitle, showPreview, onSelectDestination }: DeviceLocationMapProps) {
   const mapRef = useRef<MapView | null>(null);
   const [mapReady, setMapReady] = useState(false);
 
@@ -83,9 +83,9 @@ export function DeviceLocationMap({ point, destination, onSelectDestination }: D
         </>
       ) : null}
       {destination ? (
-        <Marker coordinate={destination} title="Destination" description="Selected destination" pinColor="#B3261E" />
+        <Marker coordinate={destination} title={destinationTitle ?? "Destination"} description="Selected destination" pinColor="#B3261E" />
       ) : null}
-      {point && destination ? (
+      {point && destination && showPreview ? (
         <Polyline
           coordinates={[
             { latitude: point.latitude, longitude: point.longitude },

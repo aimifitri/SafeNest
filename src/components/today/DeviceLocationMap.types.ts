@@ -12,5 +12,7 @@ export type DeviceLocationPoint = DeviceLocationCoordinate & {
 export type DeviceLocationMapProps = {
   point: DeviceLocationPoint | null;
   destination?: DeviceLocationCoordinate | null;
+  destinationTitle?: string;
+  showPreview?: boolean;
   onSelectDestination?: (coordinate: DeviceLocationCoordinate) => void;
 };
