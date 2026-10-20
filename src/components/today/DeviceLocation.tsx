@@ -1,14 +1,15 @@
 import type { LocationObject, LocationSubscription } from "expo-location";
 import * as Location from "expo-location";
-import { useEffect, useRef, useState } from "react";
-import { AppState, Keyboard, Linking, Modal, Platform, ScrollView, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AppState, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Icon } from "../navigation/Icon";
 import { useAppContext } from "../shared/AppContext";
-import { Btn, Input, Press, T } from "../shared/ui";
+import { Btn, Press, T } from "../shared/ui";
 import type { DeviceLocationPoint } from "./DeviceLocationMap.native";
 import { DeviceLocationMap } from "./DeviceLocationMap";
+import { NavigationSearch, type NavigationSelection } from "./NavigationSearch";
 import { TripSharing } from "./TripSharing";
 
 export function DeviceLocationModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
@@ -21,19 +22,18 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
   const [busy, setBusy] = useState(false);
   const [permissionBlocked, setPermissionBlocked] = useState(false);
   const [error, setError] = useState("");
-  const [query, setQuery] = useState("");
-  const [destination, setDestination] = useState<DeviceLocationPoint | null>(null);
-  const [searching, setSearching] = useState(false);
-  const [searchError, setSearchError] = useState("");
+  const [navigation, setNavigation] = useState<NavigationSelection>({ origin: null, destination: null, mode: "recommended" });
+  const devicePoint = useMemo<DeviceLocationPoint | null>(() => location ? {
+    latitude: location.coords.latitude, longitude: location.coords.longitude,
+    accuracy: location.coords.accuracy, title: "Your location", detail: "This phone's GPS position",
+  } : null, [location]);
   // Invalidate async work when closing, stopping, or leaving the foreground.
   const session = useRef(0);
-  const searchRequest = useRef(0);
   const starting = useRef(false);
 
   useEffect(() => {
     if (visible) return;
     session.current += 1;
-    searchRequest.current += 1;
     starting.current = false;
     subscription.current?.remove();
     subscription.current = null;
@@ -42,15 +42,11 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
     setBusy(false);
     setPermissionBlocked(false);
     setError("");
-    setQuery("");
-    setDestination(null);
-    setSearching(false);
-    setSearchError("");
+    setNavigation({ origin: null, destination: null, mode: "recommended" });
   }, [visible]);
 
   useEffect(() => () => {
     session.current += 1;
-    searchRequest.current += 1;
     subscription.current?.remove();
   }, []);
 
@@ -127,49 +123,12 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
     }
   };
 
-  const searchDestination = async () => {
-    const address = query.trim();
-    if (!address || searching) return;
-    Keyboard.dismiss();
-    const request = ++searchRequest.current;
-    setSearching(true);
-    setSearchError("");
-    try {
-      if (Platform.OS === "web") {
-        setSearchError("Destination search is available in the iOS and Android app.");
-        return;
-      }
-      // Android's native geocoder requires foreground location permission.
-      if (Platform.OS === "android") {
-        const permission = await Location.requestForegroundPermissionsAsync();
-        if (request !== searchRequest.current) return;
-        if (permission.status !== "granted") {
-          setSearchError("Allow location permission to search for a destination.");
-          setPermissionBlocked(!permission.canAskAgain);
-          setError("Location permission is needed to search on Android.");
-          return;
-        }
-      }
-      const results = await Location.geocodeAsync(address);
-      if (request !== searchRequest.current) return;
-      if (!results.length) {
-        setSearchError("Address not found. Try a full address including the city.");
-        return;
-      }
-      setDestination({ ...results[0], accuracy: null, title: address });
-    } catch {
-      if (request === searchRequest.current) setSearchError("Unable to search right now. Check your connection and try again.");
-    } finally {
-      if (request === searchRequest.current) setSearching(false);
-    }
-  };
-
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} statusBarTranslucent>
-      <View style={{ flex: 1, backgroundColor: colors.background, paddingTop: insets.top }}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1, backgroundColor: colors.background, paddingTop: insets.top }}>
         <View style={{ minHeight: 56, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
           <View>
-            <T s={1.15} w={800}>My location</T>
+            <T s={1.15} w={800}>Navigation</T>
             <T s={0.78} c="muted">{tracking ? "Live location" : "This phone only"}</T>
           </View>
           <Press onPress={onClose} label="Close my location" style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
@@ -177,15 +136,17 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
           </Press>
         </View>
 
-        <View style={{ flex: 1, minHeight: 180, marginTop: 8, backgroundColor: colors.map }}>
-          {location ? (
-            <DeviceLocationMap destination={destination} point={{
-              latitude: location.coords.latitude,
-              longitude: location.coords.longitude,
-              accuracy: location.coords.accuracy,
-              title: "This phone",
-              detail: "Your current device location",
-            }} />
+        <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+        {visible ? <>
+          <NavigationSearch devicePoint={devicePoint} onRequestGPS={() => void startTracking()} onChange={setNavigation} />
+        </> : null}
+        <View style={{ height: 320, marginTop: 8, backgroundColor: colors.map }}>
+          {navigation.origin || navigation.destination || devicePoint ? (
+            <DeviceLocationMap
+              point={(navigation.origin ?? navigation.destination ?? devicePoint)!}
+              destination={navigation.origin ? navigation.destination : null}
+              previewMode={navigation.origin && navigation.destination ? navigation.mode : undefined}
+            />
           ) : (
             <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 28, gap: 10 }}>
               <Icon name="look" size={34} color={colors.primary} stroke={1.8} />
@@ -193,36 +154,10 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
               <T s={0.88} c="muted" align="center" lh={1.4}>Start GPS to show this phone's position on the map.</T>
             </View>
           )}
-          <View style={{ position: "absolute", top: 12, left: 16, right: 16, padding: 10, borderRadius: 18, backgroundColor: colors.card, gap: 8 }}>
-            <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-              <Input
-                style={{ flex: 1 }}
-                value={query}
-                onChangeText={(text) => {
-                  searchRequest.current += 1;
-                  setSearching(false);
-                  setSearchError("");
-                  setQuery(text);
-                }}
-                placeholder="Destination name or address"
-                accessibilityLabel="Destination name or address"
-                returnKeyType="search"
-                onSubmitEditing={() => void searchDestination()}
-                maxLength={300}
-              />
-              <Btn kind="p" disabled={searching || !query.trim()} onPress={() => void searchDestination()}>{searching ? "Searching…" : "Search"}</Btn>
-            </View>
-            {searchError ? <T s={0.8} c={colors.danger}>{searchError}</T> : null}
-            {destination ? (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <T s={0.8} style={{ flex: 1 }} lines={2}>{destination.title}</T>
-                <Btn kind="o" onPress={() => { searchRequest.current += 1; setSearching(false); setDestination(null); setQuery(""); setSearchError(""); }}>Clear</Btn>
-              </View>
-            ) : null}
-          </View>
+
         </View>
 
-        <ScrollView style={{ flexGrow: 0, maxHeight: "45%" }} contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: Math.max(insets.bottom, 16), gap: 10 }} keyboardShouldPersistTaps="handled">
+        <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: Math.max(insets.bottom, 16), gap: 10 }}>
           {location ? (
             <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 12 }}>
               <View style={{ flex: 1 }}>
@@ -264,8 +199,9 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
               accuracy: location.coords.accuracy,
             } : null}
           />
+        </View>
         </ScrollView>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
