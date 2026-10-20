@@ -140,10 +140,12 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
   };
 
   const updateLocation = (next: LocationObject) => {
+    const latitude = next.coords.latitude;
+    const longitude = next.coords.longitude;
     setLocation(next);
-    setCurrentLatitude(next.coords.latitude.toFixed(6));
-    setCurrentLongitude(next.coords.longitude.toFixed(6));
-    setStartText("Your location");
+    setCurrentLatitude(latitude.toFixed(6));
+    setCurrentLongitude(longitude.toFixed(6));
+    setStartText(`${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
     setActiveSearch(null);
   };
 
