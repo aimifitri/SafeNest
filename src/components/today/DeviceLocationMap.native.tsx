@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import MapView, { Circle, Marker } from "react-native-maps";
 
 export type DeviceLocationPoint = {
@@ -8,7 +9,25 @@ export type DeviceLocationPoint = {
   detail?: string;
 };
 
-export function DeviceLocationMap({ point }: { point: DeviceLocationPoint }) {
+export type DeviceLocationMapProps = {
+  point: DeviceLocationPoint;
+  destination?: DeviceLocationPoint | null;
+};
+
+export function DeviceLocationMap({ point, destination }: DeviceLocationMapProps) {
+  const map = useRef<MapView>(null);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (!ready) return;
+    if (destination) {
+      map.current?.fitToCoordinates([point, destination], {
+        edgePadding: { top: 120, right: 60, bottom: 60, left: 60 },
+        animated: true,
+      });
+    } else {
+      map.current?.animateToRegion({ ...point, latitudeDelta: 0.012, longitudeDelta: 0.012 }, 500);
+    }
+  }, [ready, point.latitude, point.longitude, destination]);
   const region = {
     latitude: point.latitude,
     longitude: point.longitude,
@@ -17,7 +36,7 @@ export function DeviceLocationMap({ point }: { point: DeviceLocationPoint }) {
   };
 
   return (
-    <MapView style={{ flex: 1 }} initialRegion={region} region={region} showsCompass showsScale>
+    <MapView ref={map} style={{ flex: 1 }} initialRegion={region} onMapReady={() => setReady(true)} showsCompass showsScale>
       <Circle
         center={{ latitude: point.latitude, longitude: point.longitude }}
         radius={Math.max(point.accuracy ?? 20, 10)}
@@ -30,6 +49,7 @@ export function DeviceLocationMap({ point }: { point: DeviceLocationPoint }) {
         title={point.title}
         description={point.detail}
       />
+      {destination ? <Marker coordinate={destination} title={destination.title} description="Destination" pinColor="#208AEF" /> : null}
     </MapView>
   );
 }
