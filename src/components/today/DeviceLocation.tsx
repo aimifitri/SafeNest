@@ -11,6 +11,7 @@ import type { DeviceLocationPoint } from "./DeviceLocationMap.native";
 import { DeviceLocationMap } from "./DeviceLocationMap";
 import { NavigationSearch, type NavigationSelection } from "./NavigationSearch";
 import { TripSharing } from "./TripSharing";
+import { startBrowserLocation } from "./browserLocation";
 
 export function DeviceLocationModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { theme } = useAppContext();
@@ -25,7 +26,7 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
   const [navigation, setNavigation] = useState<NavigationSelection>({ origin: null, destination: null, mode: "recommended" });
   const devicePoint = useMemo<DeviceLocationPoint | null>(() => location ? {
     latitude: location.coords.latitude, longitude: location.coords.longitude,
-    accuracy: location.coords.accuracy, title: "Your location", detail: "This phone's GPS position",
+    accuracy: location.coords.accuracy, title: "Your location", detail: "This device's location",
   } : null, [location]);
   // Invalidate async work when closing, stopping, or leaving the foreground.
   const session = useRef(0);
@@ -75,6 +76,17 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
     setError("");
     setPermissionBlocked(false);
     try {
+      if (Platform.OS === "web") {
+        const watcher = await startBrowserLocation(
+          setLocation,
+          (message) => { stopTracking(); setError(message); },
+          () => request === session.current,
+        );
+        if (request !== session.current) { watcher.remove(); return; }
+        subscription.current = watcher;
+        setTracking(true);
+        return;
+      }
       let permission = await Location.getForegroundPermissionsAsync();
       if (request !== session.current) return;
       if (permission.status !== "granted") {
@@ -112,9 +124,9 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
       if (request !== session.current) { watcher.remove(); return; }
       subscription.current = watcher;
       setTracking(true);
-    } catch {
+    } catch (cause: unknown) {
       if (request !== session.current) return;
-      setError("Unable to get this phone's location. Check GPS availability and try again.");
+      setError(Platform.OS === "web" && cause instanceof Error ? cause.message : "Unable to get this phone's location. Check GPS availability and try again.");
     } finally {
       if (request === session.current) {
         starting.current = false;
@@ -129,7 +141,7 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
         <View style={{ minHeight: 56, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
           <View>
             <T s={1.15} w={800}>Navigation</T>
-            <T s={0.78} c="muted">{tracking ? "Live location" : "This phone only"}</T>
+            <T s={0.78} c="muted">{tracking ? "Live location" : Platform.OS === "web" ? "This browser only" : "This phone only"}</T>
           </View>
           <Press onPress={onClose} label="Close my location" style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
             <Icon name="x" size={20} color={colors.ink} stroke={2} />
@@ -151,7 +163,7 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
             <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 28, gap: 10 }}>
               <Icon name="look" size={34} color={colors.primary} stroke={1.8} />
               <T w={700} align="center">Location is off</T>
-              <T s={0.88} c="muted" align="center" lh={1.4}>Start GPS to show this phone's position on the map.</T>
+              <T s={0.88} c="muted" align="center" lh={1.4}>Use my location to show this device's position.</T>
             </View>
           )}
 
