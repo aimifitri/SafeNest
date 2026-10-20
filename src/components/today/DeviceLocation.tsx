@@ -282,6 +282,12 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
         </View>
 
         <ScrollView
+          style={{ flex: 1 }}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) }}
+        >
+        <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={{ flexDirection: "row", gap: 8, paddingHorizontal: 16, paddingVertical: 10 }}
@@ -327,11 +333,7 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
           )}
         </View>
 
-        <ScrollView
-          style={{ flex: 1 }}
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: Math.max(insets.bottom, 18), gap: 12 }}
-        >
+        <View style={{ paddingHorizontal: 16, paddingTop: 14, gap: 12 }}>
           <View style={{ gap: 8 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
               <View style={{ flex: 1, gap: 8 }}>
@@ -532,6 +534,7 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
               accuracy: location.coords.accuracy,
             } : null}
           />
+        </View>
         </ScrollView>
       </View>
     </Modal>
