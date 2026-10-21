@@ -20,9 +20,19 @@ import * as Location from "expo-location";
  * @typedef {{ latitude: number; longitude: number }} Coordinate
  * @typedef {"driving" | "walking" | "transit"} TravelMode
  * @typedef {{
+ *   atDistanceMeters: number;
+ *   distanceMeters: number;
+ *   instruction: string;
+ *   streetName: string;
+ *   icon: string;
+ *   isArrival: boolean;
+ * }} ManeuverStep
+ * @typedef {{
  *   coordinates: Coordinate[];
+ *   cumulativeDistances: number[];
  *   distanceMeters: number;
  *   durationSeconds: number;
+ *   steps: ManeuverStep[];
  *   mode: TravelMode;
  *   source: "OSRM" | "Estimate";
  *   summary: string;
@@ -45,6 +55,12 @@ import * as Location from "expo-location";
  *     animated: boolean;
  *   }) => void;
  *   animateToRegion: (region: Region, duration?: number) => void;
+ *   animateCamera: (camera: {
+ *     center: Coordinate;
+ *     pitch: number;
+ *     heading: number;
+ *     zoom: number;
+ *   }, options?: { duration?: number }) => void;
  * }} MapHandle
  */
 
@@ -78,6 +94,7 @@ function formatDistance(meters) {
 
 /** @param {number} seconds */
 function formatDuration(seconds) {
+  if (seconds <= 0) return "0 min";
   const totalMinutes = Math.max(1, Math.round(seconds / 60));
   const hours = Math.floor(totalMinutes / 60);
   return hours > 0
@@ -103,6 +120,68 @@ function distanceBetween(first, second) {
     * Math.cos(toRadians(second.latitude))
     * Math.sin(longitudeDelta / 2) ** 2;
   return 6_371_000 * 2 * Math.atan2(Math.sqrt(term), Math.sqrt(1 - term));
+}
+
+/** @param {Coordinate} first @param {Coordinate} second */
+function bearingBetween(first, second) {
+  const toRadians = (/** @type {number} */ degrees) => degrees * Math.PI / 180;
+  const toDegrees = (/** @type {number} */ radians) => radians * 180 / Math.PI;
+  const firstLatitude = toRadians(first.latitude);
+  const secondLatitude = toRadians(second.latitude);
+  const longitudeDelta = toRadians(second.longitude - first.longitude);
+  const y = Math.sin(longitudeDelta) * Math.cos(secondLatitude);
+  const x = Math.cos(firstLatitude) * Math.sin(secondLatitude)
+    - Math.sin(firstLatitude) * Math.cos(secondLatitude) * Math.cos(longitudeDelta);
+  return (toDegrees(Math.atan2(y, x)) + 360) % 360;
+}
+
+/**
+ * @param {string} maneuverType
+ * @param {string} modifier
+ * @returns {{ instruction: string; icon: string }}
+ */
+function describeManeuver(maneuverType, modifier) {
+  const direction = modifier.replace(/_/g, " ");
+  if (maneuverType === "arrive") return { instruction: "Arrive at your destination", icon: "◎" };
+  if (maneuverType === "roundabout" || maneuverType === "rotary") {
+    return { instruction: `Enter the roundabout${direction ? `, ${direction}` : ""}`, icon: "⟳" };
+  }
+  if (maneuverType === "uturn") return { instruction: "Make a U-turn", icon: "↶" };
+  if (maneuverType === "turn" || maneuverType === "end of road" || maneuverType === "fork") {
+    const turn = direction ? direction.charAt(0).toUpperCase() + direction.slice(1) : "ahead";
+    const verb = maneuverType === "fork" ? "Keep" : "Turn";
+    const icon = direction.includes("left") ? "↰" : direction.includes("right") ? "↱" : "↑";
+    return { instruction: `${verb} ${turn}`, icon };
+  }
+  if (maneuverType === "merge") return { instruction: "Merge onto the road", icon: "↗" };
+  if (maneuverType === "on ramp" || maneuverType === "off ramp") {
+    return { instruction: maneuverType === "on ramp" ? "Take the ramp" : "Exit the ramp", icon: "↗" };
+  }
+  return { instruction: "Continue straight", icon: "↑" };
+}
+
+/** @param {number} meters */
+function formatManeuverDistance(meters) {
+  if (meters >= 1000) return `${(meters / 1000).toFixed(1)} km`;
+  if (meters >= 100) return `${Math.round(meters / 50) * 50} m`;
+  return `${Math.max(0, Math.round(meters / 10) * 10)} m`;
+}
+
+/** @param {PlannedRoute} route @param {Coordinate} position */
+function getRouteProgress(route, position) {
+  let closestIndex = 0;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  route.coordinates.forEach((coordinate, index) => {
+    const distance = distanceBetween(position, coordinate);
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closestIndex = index;
+    }
+  });
+  return Math.min(
+    route.distanceMeters,
+    route.cumulativeDistances[closestIndex] ?? 0,
+  );
 }
 
 /**
@@ -177,6 +256,8 @@ async function getPlannedRoute(origin, destination, mode, signal) {
       coordinates: [origin, destination],
       distanceMeters,
       durationSeconds: distanceMeters / (modeInfo?.speedMetersPerSecond ?? 1.4),
+      cumulativeDistances: [0, distanceMeters],
+      steps: [],
       mode,
       source: "Estimate",
       summary: mode === "walking" ? "Approximate walking connection" : "Approximate transit journey",
@@ -224,23 +305,49 @@ async function getPlannedRoute(origin, destination, mode, signal) {
   });
   if (coordinates.length < 2) throw new Error("The routing service returned no route geometry.");
 
+  /** @type {number[]} */
+  const cumulativeDistances = [0];
+  for (let index = 1; index < coordinates.length; index += 1) {
+    cumulativeDistances.push(
+      cumulativeDistances[index - 1] + distanceBetween(coordinates[index - 1], coordinates[index]),
+    );
+  }
+
   /** @type {string[]} */
   const roadNames = [];
+  /** @type {ManeuverStep[]} */
+  const steps = [];
+  let stepDistance = 0;
   if (Array.isArray(rawRoute.legs)) {
     for (const leg of rawRoute.legs) {
       if (!isRecord(leg) || !Array.isArray(leg.steps)) continue;
       for (const step of leg.steps) {
-        if (isRecord(step) && typeof step.name === "string" && step.name.trim()) {
-          roadNames.push(step.name.trim());
-        }
+        if (!isRecord(step)) continue;
+        const name = typeof step.name === "string" ? step.name.trim() : "";
+        if (name) roadNames.push(name);
+        if (!isRecord(step.maneuver)) continue;
+        const maneuverType = typeof step.maneuver.type === "string" ? step.maneuver.type : "continue";
+        const modifier = typeof step.maneuver.modifier === "string" ? step.maneuver.modifier : "";
+        const description = describeManeuver(maneuverType, modifier);
+        steps.push({
+          atDistanceMeters: stepDistance,
+          distanceMeters: typeof step.distance === "number" ? step.distance : 0,
+          instruction: description.instruction,
+          streetName: name || "the road",
+          icon: description.icon,
+          isArrival: maneuverType === "arrive",
+        });
+        if (typeof step.distance === "number") stepDistance += step.distance;
       }
     }
   }
 
   return {
     coordinates,
+    cumulativeDistances,
     distanceMeters: rawRoute.distance,
     durationSeconds: rawRoute.duration,
+    steps,
     mode,
     source: "OSRM",
     summary: [...new Set(roadNames)].slice(0, 3).join(" · ") || "Suggested driving route",
@@ -262,6 +369,9 @@ export default function LiveLocationMap({ onLocationChange, onError } = {}) {
   const routeAbortRef = useRef(/** @type {AbortController | null} */ (null));
   const mapRef = useRef(/** @type {MapHandle | null} */ (null));
   const centeredOnLocationRef = useRef(false);
+  const navigationActiveRef = useRef(false);
+  const previousNavigationPositionRef = useRef(/** @type {Coordinate | null} */ (null));
+  const navigationHeadingRef = useRef(0);
   const callbacksRef = useRef({ onLocationChange, onError });
   callbacksRef.current = { onLocationChange, onError };
 
@@ -272,6 +382,9 @@ export default function LiveLocationMap({ onLocationChange, onError } = {}) {
   const [destination, setDestination] = useState(/** @type {Coordinate | null} */ (null));
   const [route, setRoute] = useState(/** @type {PlannedRoute | null} */ (null));
   const [travelMode, setTravelMode] = useState(/** @type {TravelMode} */ ("driving"));
+  const [navigationActive, setNavigationActive] = useState(false);
+  const [navigationProgress, setNavigationProgress] = useState(0);
+  const [navigationSpeed, setNavigationSpeed] = useState(/** @type {number | null} */ (null));
   const [locationStatus, setLocationStatus] = useState("requesting");
   const [locationError, setLocationError] = useState("");
   const [routeError, setRouteError] = useState("");
@@ -282,11 +395,30 @@ export default function LiveLocationMap({ onLocationChange, onError } = {}) {
   const handleLocation = useCallback((nextLocation) => {
     locationRef.current = nextLocation;
     setLocation(nextLocation);
+    setNavigationSpeed(nextLocation.coords.speed);
+    const currentCoordinate = {
+      latitude: nextLocation.coords.latitude,
+      longitude: nextLocation.coords.longitude,
+    };
+    const previousCoordinate = previousNavigationPositionRef.current;
+    if (typeof nextLocation.coords.heading === "number" && nextLocation.coords.heading >= 0) {
+      navigationHeadingRef.current = nextLocation.coords.heading;
+    } else if (previousCoordinate && distanceBetween(previousCoordinate, currentCoordinate) > 2) {
+      navigationHeadingRef.current = bearingBetween(previousCoordinate, currentCoordinate);
+    }
+    previousNavigationPositionRef.current = currentCoordinate;
+
+    if (navigationActiveRef.current) {
+      mapRef.current?.animateCamera({
+        center: currentCoordinate,
+        pitch: 45,
+        heading: navigationHeadingRef.current,
+        zoom: 17,
+      }, { duration: 800 });
+    }
+
     if (originTextRef.current) {
-      setOrigin({
-        latitude: nextLocation.coords.latitude,
-        longitude: nextLocation.coords.longitude,
-      });
+      setOrigin(currentCoordinate);
     }
     callbacksRef.current.onLocationChange?.({
       latitude: nextLocation.coords.latitude,
@@ -428,11 +560,34 @@ export default function LiveLocationMap({ onLocationChange, onError } = {}) {
 
   useEffect(() => {
     if (Platform.OS === "web" || !mapRef.current || !route) return;
+    if (navigationActive) return;
     mapRef.current.fitToCoordinates(route.coordinates, {
       edgePadding: { top: 44, right: 36, bottom: 44, left: 36 },
       animated: true,
     });
-  }, [route]);
+  }, [navigationActive, route]);
+
+  useEffect(() => {
+    if (!navigationActive || !route || !location) return;
+    const progress = getRouteProgress(route, {
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+    });
+    setNavigationProgress((current) => Math.max(current, progress));
+  }, [location, navigationActive, route]);
+
+  useEffect(() => {
+    if (!navigationActive || Platform.OS === "web" || !location || !mapRef.current) return;
+    mapRef.current.animateCamera({
+      center: {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      },
+      pitch: 45,
+      heading: navigationHeadingRef.current,
+      zoom: 17,
+    }, { duration: 700 });
+  }, [location, navigationActive]);
 
   /** @param {TravelMode} [requestedMode] */
   const findRoute = useCallback(async (requestedMode = travelMode) => {
@@ -484,7 +639,64 @@ export default function LiveLocationMap({ onLocationChange, onError } = {}) {
     setRoute(null);
     setRouteError("");
     setRouteLoading(false);
+    setNavigationProgress(0);
   }, []);
+
+  const startNavigation = useCallback(async () => {
+    if (!route || route.source !== "OSRM" || route.mode !== "driving") {
+      setRouteError("Turn-by-turn navigation is available for planned driving routes only.");
+      return;
+    }
+    if (originText.trim().toLowerCase() !== "current location") {
+      setRouteError("Set the starting point to Current location to begin live navigation.");
+      return;
+    }
+    const currentFix = await startWatching();
+    if (!currentFix) {
+      setRouteError("Live navigation needs location access. Enable GPS and try again.");
+      return;
+    }
+    previousNavigationPositionRef.current = currentFix;
+    const heading = locationRef.current?.coords.heading;
+    if (typeof heading === "number" && heading >= 0) navigationHeadingRef.current = heading;
+    setNavigationProgress(getRouteProgress(route, currentFix));
+    navigationActiveRef.current = true;
+    setNavigationActive(true);
+    setRouteError("");
+    mapRef.current?.animateCamera({
+      center: currentFix,
+      pitch: 45,
+      heading: navigationHeadingRef.current,
+      zoom: 17,
+    }, { duration: 700 });
+  }, [originText, route, startWatching]);
+
+  const exitNavigation = useCallback(() => {
+    navigationActiveRef.current = false;
+    setNavigationActive(false);
+    previousNavigationPositionRef.current = null;
+    stopWatching();
+    if (route) {
+      setTimeout(() => {
+        const current = locationRef.current;
+        if (current) {
+          mapRef.current?.animateCamera({
+            center: {
+              latitude: current.coords.latitude,
+              longitude: current.coords.longitude,
+            },
+            pitch: 0,
+            heading: 0,
+            zoom: 13,
+          }, { duration: 300 });
+        }
+        mapRef.current?.fitToCoordinates(route.coordinates, {
+          edgePadding: { top: 44, right: 36, bottom: 44, left: 36 },
+          animated: true,
+        });
+      }, 100);
+    }
+  }, [route, stopWatching]);
 
   const maps = Platform.OS === "web" ? null : require("react-native-maps");
   const NativeMapView = maps?.default;
@@ -503,7 +715,121 @@ export default function LiveLocationMap({ onLocationChange, onError } = {}) {
     }
     : DEFAULT_REGION;
 
-  return h(
+  const remainingDistance = route
+    ? Math.max(0, route.distanceMeters - navigationProgress)
+    : 0;
+  const remainingDuration = route && route.distanceMeters > 0
+    ? route.durationSeconds * remainingDistance / route.distanceMeters
+    : 0;
+  const routeManeuvers = route?.steps.filter((step) => !step.isArrival) ?? [];
+  const nextManeuverIndex = routeManeuvers.findIndex(
+    (step) => step.atDistanceMeters > navigationProgress + 8,
+  );
+  const arrivalManeuver = route?.steps.find((step) => step.isArrival) ?? null;
+  const activeManeuver = remainingDistance <= 30
+    ? null
+    : nextManeuverIndex >= 0
+      ? routeManeuvers[nextManeuverIndex]
+      : null;
+  const followingManeuver = nextManeuverIndex >= 0
+    ? routeManeuvers[nextManeuverIndex + 1]
+    : null;
+  const previewManeuver = followingManeuver ?? arrivalManeuver;
+  const distanceToManeuver = activeManeuver
+    ? Math.max(0, activeManeuver.atDistanceMeters - navigationProgress)
+    : remainingDistance;
+  const displayedSpeed = typeof navigationSpeed === "number" && navigationSpeed >= 0
+    ? `${Math.round(navigationSpeed * 3.6)} km/h`
+    : "-- km/h";
+  const canStartNavigation = Boolean(
+    route
+    && route.source === "OSRM"
+    && route.mode === "driving"
+    && Platform.OS !== "web"
+    && currentOrigin,
+  );
+
+  const mapContent = NativeMapView && Marker && Polyline
+    ? h(
+      View,
+      { style: [styles.mapFrame, navigationActive ? styles.navigationMapFrame : null] },
+      h(
+        NativeMapView,
+        /** @type {React.ComponentProps<typeof NativeMapView> & { ref: React.Ref<MapHandle> }} */ ({
+          ref: mapRef,
+          style: styles.map,
+          initialRegion: mapRegion,
+          showsUserLocation: true,
+          showsMyLocationButton: false,
+          showsCompass: !navigationActive,
+          accessibilityLabel: navigationActive
+            ? "Live navigation map"
+            : "Navigation map showing the current location and planned route",
+        }),
+        !currentOrigin && origin
+          ? h(Marker, { coordinate: origin, title: "Starting point" })
+          : null,
+        destination
+          ? h(Marker, { coordinate: destination, title: destinationText || "Destination" })
+          : null,
+        route
+          ? h(Polyline, {
+            coordinates: route.coordinates,
+            strokeColor: "#187C78",
+            strokeWidth: navigationActive ? 7 : 6,
+            lineCap: "round",
+            lineJoin: "round",
+          })
+          : null,
+      ),
+      !navigationActive
+        ? h(
+          React.Fragment,
+          null,
+          h(
+            View,
+            { style: styles.mapBadge },
+            h(View, { style: styles.statusDot }),
+            h(Text, { style: styles.mapBadgeText }, locationStatus === "tracking" ? "LIVE" : "MAP"),
+          ),
+          h(
+            Pressable,
+            {
+              onPress: () => {
+                if (currentCoordinate) {
+                  mapRef.current?.animateToRegion({
+                    ...currentCoordinate,
+                    latitudeDelta: 0.012,
+                    longitudeDelta: 0.012,
+                  }, 350);
+                } else {
+                  void startWatching();
+                }
+              },
+              accessibilityRole: "button",
+              accessibilityLabel: "Center map on current location",
+              style: styles.centerButton,
+            },
+            h(Text, { style: styles.centerGlyph }, "⌖"),
+          ),
+        )
+        : null,
+    )
+    : h(
+      View,
+      { style: [styles.mapFrame, styles.mapFallback, navigationActive ? styles.navigationMapFrame : null] },
+      h(Text, { style: styles.fallbackGlyph }, "⌖"),
+      h(Text, { style: styles.fallbackTitle }, Platform.OS === "web" ? "Map preview is available in the mobile app" : "Map is loading"),
+      h(
+        Text,
+        { style: styles.fallbackText },
+        Platform.OS === "web"
+          ? "Place search and route estimates remain available here."
+          : "Your map will appear as soon as the native map is ready.",
+      ),
+    );
+
+  const plannerScreen = h(
     ScrollView,
     {
       style: styles.scroll,
@@ -620,77 +946,7 @@ export default function LiveLocationMap({ onLocationChange, onError } = {}) {
         h(Text, { style: [styles.modeText, travelMode === mode.id ? styles.modeTextSelected : null] }, mode.label),
       )),
     ),
-    NativeMapView && Marker && Polyline
-      ? h(
-        View,
-        { style: styles.mapFrame },
-        h(
-          NativeMapView,
-          /** @type {React.ComponentProps<typeof NativeMapView> & { ref: React.Ref<MapHandle> }} */ ({
-            ref: mapRef,
-            style: styles.map,
-            initialRegion: mapRegion,
-            showsUserLocation: true,
-            showsMyLocationButton: false,
-            showsCompass: true,
-            accessibilityLabel: "Navigation map showing the current location and planned route",
-          }),
-          !currentOrigin && origin
-            ? h(Marker, { coordinate: origin, title: "Starting point" })
-            : null,
-          destination
-            ? h(Marker, { coordinate: destination, title: destinationText || "Destination" })
-            : null,
-          route
-            ? h(Polyline, {
-              coordinates: route.coordinates,
-              strokeColor: "#187C78",
-              strokeWidth: 6,
-              lineCap: "round",
-              lineJoin: "round",
-            })
-            : null,
-        ),
-        h(
-          View,
-          { style: styles.mapBadge },
-          h(View, { style: styles.statusDot }),
-          h(Text, { style: styles.mapBadgeText }, locationStatus === "tracking" ? "LIVE" : "MAP"),
-        ),
-        h(
-          Pressable,
-          {
-            onPress: () => {
-              if (currentCoordinate) {
-                mapRef.current?.animateToRegion({
-                  ...currentCoordinate,
-                  latitudeDelta: 0.012,
-                  longitudeDelta: 0.012,
-                }, 350);
-              } else {
-                void startWatching();
-              }
-            },
-            accessibilityRole: "button",
-            accessibilityLabel: "Center map on current location",
-            style: styles.centerButton,
-          },
-          h(Text, { style: styles.centerGlyph }, "⌖"),
-        ),
-      )
-      : h(
-        View,
-        { style: [styles.mapFrame, styles.mapFallback] },
-        h(Text, { style: styles.fallbackGlyph }, "⌖"),
-        h(Text, { style: styles.fallbackTitle }, Platform.OS === "web" ? "Map preview is available in the mobile app" : "Map is loading"),
-        h(
-          Text,
-          { style: styles.fallbackText },
-          Platform.OS === "web"
-            ? "Place search and route estimates remain available here."
-            : "Your map will appear as soon as the native map is ready.",
-        ),
-      ),
+    mapContent,
     route
       ? h(
         View,
@@ -732,6 +988,35 @@ export default function LiveLocationMap({ onLocationChange, onError } = {}) {
             ? "Suggested driving route. Live traffic and toll data are not included."
             : "Approximate distance and time with a straight-line map connection; no walking or transit route provider is connected.",
         ),
+        h(
+          Pressable,
+          {
+            onPress: () => void startNavigation(),
+            disabled: routeLoading || !canStartNavigation,
+            accessibilityRole: "button",
+            accessibilityState: {
+              disabled: routeLoading || !canStartNavigation,
+            },
+            style: [
+              styles.startNavigationButton,
+              !canStartNavigation
+                ? styles.planButtonDisabled
+                : null,
+            ],
+          },
+          h(Text, { style: styles.startNavigationText }, "Start Navigation"),
+        ),
+        !canStartNavigation
+          ? h(
+            Text,
+            { style: styles.navigationAvailability },
+            Platform.OS === "web"
+              ? "Live navigation is available in the iOS and Android app."
+              : !currentOrigin
+                ? "Set the starting point to Current location to begin live navigation."
+                : "Turn-by-turn navigation requires a driving route.",
+          )
+          : null,
       )
       : null,
     routeError
@@ -781,9 +1066,223 @@ export default function LiveLocationMap({ onLocationChange, onError } = {}) {
         : null,
     ),
   );
+
+  const navigationScreen = h(
+    View,
+    { style: styles.navigationScreen },
+    mapContent,
+    h(
+      View,
+      { style: styles.turnBanner, accessibilityLiveRegion: "polite" },
+      h(
+        View,
+        { style: styles.turnIconContainer },
+        h(Text, { style: styles.turnIcon }, remainingDistance <= 30 ? "◎" : activeManeuver?.icon ?? "↑"),
+      ),
+      h(
+        View,
+        { style: styles.turnCopy },
+        h(
+          View,
+          { style: styles.turnInstructionLine },
+          h(
+            Text,
+            { style: styles.turnInstruction, numberOfLines: 1 },
+            remainingDistance <= 30 ? "You have arrived" : activeManeuver?.instruction ?? "Continue to destination",
+          ),
+          remainingDistance > 30
+            ? h(Text, { style: styles.turnDistance }, formatManeuverDistance(distanceToManeuver))
+            : null,
+        ),
+        h(Text, { style: styles.turnStreet, numberOfLines: 1 }, activeManeuver?.streetName ?? destinationText),
+        previewManeuver && remainingDistance > 30
+          ? h(
+            Text,
+            { style: styles.thenInstruction, numberOfLines: 1 },
+            `Then ${previewManeuver.instruction.toLowerCase()}`,
+          )
+          : null,
+      ),
+    ),
+    h(
+      View,
+      { style: styles.navigationBottom },
+      locationStatus === "error"
+        ? h(Text, { style: styles.navigationGpsError }, "GPS signal lost · guidance is paused")
+        : null,
+      h(
+        View,
+        { style: styles.navigationStats },
+        h(
+          View,
+          { style: styles.navigationStat },
+          h(Text, { style: styles.navigationStatValue }, formatDuration(remainingDuration)),
+          h(Text, { style: styles.navigationStatLabel }, "LEFT"),
+        ),
+        h(
+          View,
+          { style: styles.navigationStat },
+          h(Text, { style: styles.navigationStatValue }, formatDistance(remainingDistance)),
+          h(Text, { style: styles.navigationStatLabel }, "DISTANCE"),
+        ),
+        h(
+          View,
+          { style: styles.navigationStat },
+          h(Text, { style: styles.navigationStatValue }, formatEta(remainingDuration)),
+          h(Text, { style: styles.navigationStatLabel }, "ETA"),
+        ),
+        h(
+          View,
+          { style: styles.navigationStat },
+          h(Text, { style: styles.navigationStatValue }, displayedSpeed),
+          h(Text, { style: styles.navigationStatLabel }, "SPEED"),
+        ),
+      ),
+      h(
+        Pressable,
+        {
+          onPress: exitNavigation,
+          accessibilityRole: "button",
+          accessibilityLabel: "Exit navigation and stop location tracking",
+          style: styles.exitButton,
+        },
+        h(Text, { style: styles.exitButtonText }, "Exit"),
+      ),
+    ),
+  );
+
+  return navigationActive ? navigationScreen : plannerScreen;
 }
 
 const styles = StyleSheet.create({
+  navigationScreen: {
+    flex: 1,
+    overflow: "hidden",
+    backgroundColor: "#E6EFEC",
+  },
+  navigationMapFrame: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    height: "100%",
+    borderRadius: 0,
+  },
+  turnBanner: {
+    position: "absolute",
+    top: 42,
+    left: 14,
+    right: 14,
+    minHeight: 112,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 18,
+    backgroundColor: "#147B76",
+    shadowColor: "#18302D",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 9,
+    elevation: 6,
+  },
+  turnIconContainer: {
+    width: 50,
+    height: 50,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 25,
+    backgroundColor: "rgba(255,255,255,0.16)",
+  },
+  turnIcon: {
+    color: "#FFFFFF",
+    fontSize: 31,
+    fontWeight: "600",
+  },
+  turnCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  turnInstructionLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  turnInstruction: {
+    flex: 1,
+    color: "#FFFFFF",
+    fontSize: 20,
+    fontWeight: "700",
+  },
+  turnDistance: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  turnStreet: {
+    color: "#E1F3F0",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  thenInstruction: {
+    color: "#C8E6E2",
+    fontSize: 11,
+  },
+  navigationBottom: {
+    position: "absolute",
+    right: 12,
+    bottom: 20,
+    left: 12,
+    gap: 14,
+    padding: 16,
+    borderRadius: 20,
+    backgroundColor: "#FFFFFF",
+    shadowColor: "#18302D",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 7,
+  },
+  navigationGpsError: {
+    color: "#A84436",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  navigationStats: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+  },
+  navigationStat: {
+    flex: 1,
+    gap: 5,
+  },
+  navigationStatValue: {
+    color: "#1A302F",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  navigationStatLabel: {
+    color: "#84938F",
+    fontSize: 8,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+  },
+  exitButton: {
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 13,
+    backgroundColor: "#F1F5F4",
+  },
+  exitButtonText: {
+    color: "#445955",
+    fontSize: 14,
+    fontWeight: "700",
+  },
   scroll: {
     flex: 1,
     backgroundColor: "#F4F7F6",
@@ -1064,6 +1563,23 @@ const styles = StyleSheet.create({
     color: "#899693",
     fontSize: 10,
     lineHeight: 15,
+  },
+  startNavigationButton: {
+    minHeight: 46,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 13,
+    backgroundColor: "#147B76",
+  },
+  startNavigationText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  navigationAvailability: {
+    color: "#899693",
+    fontSize: 10,
+    textAlign: "center",
   },
   errorCard: {
     gap: 5,
