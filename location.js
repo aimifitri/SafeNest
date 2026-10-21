@@ -2,7 +2,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  AppState,
   Linking,
   Platform,
   Pressable,
@@ -24,6 +23,7 @@ import * as Location from "expo-location";
  *   coordinates: Coordinate[];
  *   distanceMeters: number;
  *   durationSeconds: number;
+ *   mode: TravelMode;
  *   source: "OSRM" | "Estimate";
  *   summary: string;
  * }} PlannedRoute
@@ -39,6 +39,13 @@ import * as Location from "expo-location";
  *   onLocationChange?: (update: LocationUpdate) => void;
  *   onError?: (error: Error) => void;
  * }} LiveLocationMapProps
+ * @typedef {{
+ *   fitToCoordinates: (coordinates: Coordinate[], options: {
+ *     edgePadding: { top: number; right: number; bottom: number; left: number };
+ *     animated: boolean;
+ *   }) => void;
+ *   animateToRegion: (region: Region, duration?: number) => void;
+ * }} MapHandle
  */
 
 const h = React.createElement;
@@ -51,9 +58,9 @@ const DEFAULT_REGION = {
   longitudeDelta: 0.08,
 };
 /** @type {Array<{ id: TravelMode; label: string; speedMetersPerSecond: number }>} */
-const ROUTE_MODES = [
-  { id: "driving", label: "Driving", speedMetersPerSecond: 13.9 },
-  { id: "walking", label: "Walking", speedMetersPerSecond: 1.4 },
+const TRAVEL_MODES = [
+  { id: "driving", label: "Drive", speedMetersPerSecond: 13.9 },
+  { id: "walking", label: "Walk", speedMetersPerSecond: 1.4 },
   { id: "transit", label: "Transit", speedMetersPerSecond: 8.3 },
 ];
 
@@ -62,26 +69,20 @@ function isRecord(value) {
   return typeof value === "object" && value !== null;
 }
 
-/** @param {Coordinate} first @param {Coordinate} second */
-function distanceBetween(first, second) {
-  const radians = (/** @type {number} */ degrees) => degrees * Math.PI / 180;
-  const latDelta = radians(second.latitude - first.latitude);
-  const lonDelta = radians(second.longitude - first.longitude);
-  const a = Math.sin(latDelta / 2) ** 2
-    + Math.cos(radians(first.latitude)) * Math.cos(radians(second.latitude)) * Math.sin(lonDelta / 2) ** 2;
-  return 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
 /** @param {number} meters */
 function formatDistance(meters) {
-  return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
+  return meters >= 1000
+    ? `${(meters / 1000).toFixed(1)} km`
+    : `${Math.round(meters)} m`;
 }
 
 /** @param {number} seconds */
 function formatDuration(seconds) {
-  const minutes = Math.max(1, Math.round(seconds / 60));
-  const hours = Math.floor(minutes / 60);
-  return hours > 0 ? `${hours} hr ${minutes % 60} min` : `${minutes} min`;
+  const totalMinutes = Math.max(1, Math.round(seconds / 60));
+  const hours = Math.floor(totalMinutes / 60);
+  return hours > 0
+    ? `${hours} hr ${totalMinutes % 60} min`
+    : `${totalMinutes} min`;
 }
 
 /** @param {number} seconds */
@@ -92,19 +93,36 @@ function formatEta(seconds) {
   });
 }
 
-/** @param {string} query @param {AbortSignal} signal @returns {Promise<Coordinate>} */
-async function geocodePlace(query, signal) {
-  const address = query.trim();
-  if (!address) throw new Error("Enter a location to search.");
+/** @param {Coordinate} first @param {Coordinate} second */
+function distanceBetween(first, second) {
+  const toRadians = (/** @type {number} */ degrees) => degrees * Math.PI / 180;
+  const latitudeDelta = toRadians(second.latitude - first.latitude);
+  const longitudeDelta = toRadians(second.longitude - first.longitude);
+  const term = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(toRadians(first.latitude))
+    * Math.cos(toRadians(second.latitude))
+    * Math.sin(longitudeDelta / 2) ** 2;
+  return 6_371_000 * 2 * Math.atan2(Math.sqrt(term), Math.sqrt(1 - term));
+}
 
-  // Native uses the platform geocoder; web uses OpenStreetMap's public geocoder.
+/**
+ * Uses Expo's native place geocoder. Web uses the OpenStreetMap search endpoint
+ * because Expo Location's native geocoder is not available in browsers.
+ * @param {string} place
+ * @param {AbortSignal} signal
+ * @returns {Promise<Coordinate>}
+ */
+async function geocodePlace(place, signal) {
+  const query = place.trim();
+  if (!query) throw new Error("Enter a destination to search.");
+
   if (Platform.OS !== "web") {
-    const results = await Location.geocodeAsync(address);
-    const first = results[0];
-    if (!first || !Number.isFinite(first.latitude) || !Number.isFinite(first.longitude)) {
-      throw new Error(`No location was found for "${address}".`);
+    const matches = await Location.geocodeAsync(query);
+    const match = matches[0];
+    if (!match || !Number.isFinite(match.latitude) || !Number.isFinite(match.longitude)) {
+      throw new Error(`No place was found for "${query}". Try adding a city or region.`);
     }
-    return { latitude: first.latitude, longitude: first.longitude };
+    return { latitude: match.latitude, longitude: match.longitude };
   }
 
   const previousRequest = nominatimQueue;
@@ -120,18 +138,19 @@ async function geocodePlace(query, signal) {
     if (signal.aborted) throw new Error("Place search was cancelled.");
     lastNominatimRequestAt = Date.now();
 
-    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(address)}`;
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`;
     const response = await fetch(url, {
       signal,
       headers: { Accept: "application/json" },
     });
     if (!response.ok) throw new Error(`Place search failed (HTTP ${response.status}).`);
-    const payload = await response.json();
-    if (!Array.isArray(payload) || !isRecord(payload[0])) {
-      throw new Error(`No location was found for "${address}".`);
+    const result = await response.json();
+    if (!Array.isArray(result) || !isRecord(result[0])) {
+      throw new Error(`No place was found for "${query}". Try adding a city or region.`);
     }
-    const latitude = Number(payload[0].lat);
-    const longitude = Number(payload[0].lon);
+
+    const latitude = Number(result[0].lat);
+    const longitude = Number(result[0].lon);
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
       throw new Error("Place search returned invalid coordinates.");
     }
@@ -142,6 +161,7 @@ async function geocodePlace(query, signal) {
 }
 
 /**
+ * Gets a driving route from OSRM or a clearly marked non-driving estimate.
  * @param {Coordinate} origin
  * @param {Coordinate} destination
  * @param {TravelMode} mode
@@ -150,37 +170,55 @@ async function geocodePlace(query, signal) {
  */
 async function getPlannedRoute(origin, destination, mode, signal) {
   if (mode !== "driving") {
-    // The public OSRM endpoint offers driving only; avoid presenting a car route as transit/walking.
     const directDistance = distanceBetween(origin, destination);
-    const estimatedRoadFactor = mode === "transit" ? 1.25 : 1.15;
-    const distanceMeters = directDistance * estimatedRoadFactor;
-    const selectedMode = ROUTE_MODES.find((item) => item.id === mode);
+    const distanceMeters = directDistance * (mode === "walking" ? 1.15 : 1.25);
+    const modeInfo = TRAVEL_MODES.find((item) => item.id === mode);
     return {
       coordinates: [origin, destination],
       distanceMeters,
-      durationSeconds: distanceMeters / (selectedMode?.speedMetersPerSecond ?? 1.4),
+      durationSeconds: distanceMeters / (modeInfo?.speedMetersPerSecond ?? 1.4),
+      mode,
       source: "Estimate",
-      summary: mode === "walking" ? "Approximate walking path" : "Approximate transit journey",
+      summary: mode === "walking" ? "Approximate walking connection" : "Approximate transit journey",
     };
   }
 
   const url = `https://router.project-osrm.org/route/v1/driving/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?overview=full&geometries=geojson&steps=true`;
-  const response = await fetch(url, { signal, headers: { Accept: "application/json" } });
-  if (!response.ok) throw new Error(`Driving route request failed (HTTP ${response.status}).`);
+  const response = await fetch(url, {
+    signal,
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) throw new Error(`Route request failed (HTTP ${response.status}).`);
   const payload = await response.json();
-  if (!isRecord(payload) || payload.code !== "Ok" || !Array.isArray(payload.routes) || !isRecord(payload.routes[0])) {
-    const reason = isRecord(payload) && typeof payload.message === "string" ? payload.message : "No drivable route was found.";
-    throw new Error(reason);
+  if (
+    !isRecord(payload)
+    || payload.code !== "Ok"
+    || !Array.isArray(payload.routes)
+    || !isRecord(payload.routes[0])
+  ) {
+    const detail = isRecord(payload) && typeof payload.message === "string"
+      ? payload.message
+      : "No driving route was found.";
+    throw new Error(detail);
   }
 
   const rawRoute = payload.routes[0];
   const geometry = isRecord(rawRoute.geometry) ? rawRoute.geometry.coordinates : null;
-  if (!Array.isArray(geometry) || typeof rawRoute.distance !== "number" || typeof rawRoute.duration !== "number") {
+  if (
+    !Array.isArray(geometry)
+    || typeof rawRoute.distance !== "number"
+    || typeof rawRoute.duration !== "number"
+  ) {
     throw new Error("The routing service returned an incomplete route.");
   }
+
   const coordinates = geometry.map((pair) => {
-    if (!Array.isArray(pair) || typeof pair[0] !== "number" || typeof pair[1] !== "number") {
-      throw new Error("The routing service returned invalid route coordinates.");
+    if (
+      !Array.isArray(pair)
+      || typeof pair[0] !== "number"
+      || typeof pair[1] !== "number"
+    ) {
+      throw new Error("The routing service returned invalid route geometry.");
     }
     return { longitude: pair[0], latitude: pair[1] };
   });
@@ -192,106 +230,63 @@ async function getPlannedRoute(origin, destination, mode, signal) {
     for (const leg of rawRoute.legs) {
       if (!isRecord(leg) || !Array.isArray(leg.steps)) continue;
       for (const step of leg.steps) {
-        if (isRecord(step) && typeof step.name === "string" && step.name.trim()) roadNames.push(step.name.trim());
+        if (isRecord(step) && typeof step.name === "string" && step.name.trim()) {
+          roadNames.push(step.name.trim());
+        }
       }
     }
   }
+
   return {
     coordinates,
     distanceMeters: rawRoute.distance,
     durationSeconds: rawRoute.duration,
+    mode,
     source: "OSRM",
     summary: [...new Set(roadNames)].slice(0, 3).join(" · ") || "Suggested driving route",
   };
 }
 
 /**
- * @typedef {{
- *   fitToCoordinates: (coordinates: Coordinate[], options: { edgePadding: { top: number; right: number; bottom: number; left: number }; animated: boolean }) => void;
- *   animateToRegion: (region: Region, duration?: number) => void;
- * }} MapHandle
- */
-
-/**
- * Live foreground GPS map. On web, shows location details without loading the native map module.
- * Location updates are local to this screen and are not uploaded to a server.
- *
+ * A compact route planner with foreground GPS tracking. Location updates stay
+ * on-device unless the parent explicitly handles the onLocationChange callback.
  * @param {LiveLocationMapProps} props
  * @returns {React.ReactElement}
  */
 export default function LiveLocationMap({ onLocationChange, onError } = {}) {
   const subscriptionRef = useRef(/** @type {LocationSubscription | null} */ (null));
-  const requestIdRef = useRef(0);
+  const locationRef = useRef(/** @type {LocationObject | null} */ (null));
+  const locationRequestRef = useRef(0);
+  const locationPromiseRef = useRef(/** @type {Promise<Coordinate | null> | null} */ (null));
   const routeRequestRef = useRef(0);
   const routeAbortRef = useRef(/** @type {AbortController | null} */ (null));
-  const locationRef = useRef(/** @type {LocationObject | null} */ (null));
-  const useCurrentOriginRef = useRef(true);
   const mapRef = useRef(/** @type {MapHandle | null} */ (null));
+  const centeredOnLocationRef = useRef(false);
   const callbacksRef = useRef({ onLocationChange, onError });
   callbacksRef.current = { onLocationChange, onError };
 
   const [location, setLocation] = useState(/** @type {LocationObject | null} */ (null));
-  const [region, setRegion] = useState(/** @type {Region} */ (DEFAULT_REGION));
-  const [status, setStatus] = useState("idle");
-  const [errorMessage, setErrorMessage] = useState("");
-  const [permissionBlocked, setPermissionBlocked] = useState(false);
-  const [originText, setOriginText] = useState("Current Location");
+  const [originText, setOriginText] = useState("Current location");
   const [destinationText, setDestinationText] = useState("");
   const [origin, setOrigin] = useState(/** @type {Coordinate | null} */ (null));
   const [destination, setDestination] = useState(/** @type {Coordinate | null} */ (null));
-  const [travelMode, setTravelMode] = useState(/** @type {TravelMode} */ ("driving"));
   const [route, setRoute] = useState(/** @type {PlannedRoute | null} */ (null));
-  const [routeLoading, setRouteLoading] = useState(false);
+  const [travelMode, setTravelMode] = useState(/** @type {TravelMode} */ ("driving"));
+  const [locationStatus, setLocationStatus] = useState("requesting");
+  const [locationError, setLocationError] = useState("");
   const [routeError, setRouteError] = useState("");
-
-  const stopWatching = useCallback(() => {
-    requestIdRef.current += 1;
-    subscriptionRef.current?.remove();
-    subscriptionRef.current = null;
-    setStatus((current) => current === "requesting" ? "idle" : "stopped");
-  }, []);
-
-  useEffect(() => () => {
-    requestIdRef.current += 1;
-    subscriptionRef.current?.remove();
-    subscriptionRef.current = null;
-    routeRequestRef.current += 1;
-    routeAbortRef.current?.abort();
-  }, []);
-
-  useEffect(() => {
-    const listener = AppState.addEventListener("change", (nextState) => {
-      if (nextState !== "active") stopWatching();
-    });
-    return () => listener.remove();
-  }, [stopWatching]);
-
-  /** @type {(message: string, detail?: string) => void} */
-  const reportError = useCallback((message, detail) => {
-    const nextError = new Error(detail ? `${message} ${detail}` : message);
-    setErrorMessage(message);
-    setStatus("error");
-    callbacksRef.current.onError?.(nextError);
-  }, []);
+  const [permissionBlocked, setPermissionBlocked] = useState(false);
+  const [routeLoading, setRouteLoading] = useState(false);
 
   /** @type {(nextLocation: LocationObject) => void} */
   const handleLocation = useCallback((nextLocation) => {
     locationRef.current = nextLocation;
     setLocation(nextLocation);
-    const nextRegion = {
-      latitude: nextLocation.coords.latitude,
-      longitude: nextLocation.coords.longitude,
-      latitudeDelta: 0.012,
-      longitudeDelta: 0.012,
-    };
-    setRegion(nextRegion);
-    if (useCurrentOriginRef.current) {
-      const currentCoordinate = {
+    if (originTextRef.current) {
+      setOrigin({
         latitude: nextLocation.coords.latitude,
         longitude: nextLocation.coords.longitude,
-      };
-      setOrigin(currentCoordinate);
-      mapRef.current?.animateToRegion(nextRegion, 350);
+      });
     }
     callbacksRef.current.onLocationChange?.({
       latitude: nextLocation.coords.latitude,
@@ -303,653 +298,831 @@ export default function LiveLocationMap({ onLocationChange, onError } = {}) {
     });
   }, []);
 
-  /** @returns {Promise<Coordinate | null>} */
-  const startWatching = useCallback(async () => {
-    if (status === "tracking" || status === "requesting") {
-      const current = locationRef.current;
-      return current
-        ? { latitude: current.coords.latitude, longitude: current.coords.longitude }
-        : null;
-    }
+  const originTextRef = useRef(true);
+  originTextRef.current = originText.trim().toLowerCase() === "current location";
 
-    const requestId = requestIdRef.current + 1;
-    requestIdRef.current = requestId;
-    const isCurrentRequest = () => requestId === requestIdRef.current;
-    setStatus("requesting");
-    setErrorMessage("");
+  /** @type {(message: string, detail?: string) => void} */
+  const reportLocationError = useCallback((message, detail) => {
+    const error = new Error(detail ? `${message} ${detail}` : message);
+    setLocationError(message);
+    setLocationStatus("error");
+    callbacksRef.current.onError?.(error);
+  }, []);
+
+  const startWatching = useCallback(() => {
+    if (locationStatus === "tracking") {
+      const current = locationRef.current;
+      return Promise.resolve(current
+        ? { latitude: current.coords.latitude, longitude: current.coords.longitude }
+        : null);
+    }
+    if (locationPromiseRef.current) return locationPromiseRef.current;
+
+    const requestId = locationRequestRef.current + 1;
+    locationRequestRef.current = requestId;
+    const isCurrentRequest = () => requestId === locationRequestRef.current;
+    setLocationStatus("requesting");
+    setLocationError("");
     setPermissionBlocked(false);
 
-    try {
-      let permission = await Location.getForegroundPermissionsAsync();
-      if (!isCurrentRequest()) return;
+    const request = (async () => {
+      try {
+        let permission = await Location.getForegroundPermissionsAsync();
+        if (!isCurrentRequest()) return null;
+        if (permission.status !== "granted") {
+          permission = await Location.requestForegroundPermissionsAsync();
+        }
+        if (!isCurrentRequest()) return null;
+        if (permission.status !== "granted") {
+          setPermissionBlocked(!permission.canAskAgain);
+          reportLocationError("Allow location access to show your live position.");
+          return null;
+        }
 
-      if (permission.status !== "granted") {
-        permission = await Location.requestForegroundPermissionsAsync();
-      }
-      if (!isCurrentRequest()) return;
+        const servicesEnabled = await Location.hasServicesEnabledAsync();
+        if (!isCurrentRequest()) return null;
+        if (!servicesEnabled) {
+          reportLocationError("Location services are off. Turn on GPS and try again.");
+          return null;
+        }
 
-      if (permission.status !== "granted") {
-        setPermissionBlocked(!permission.canAskAgain);
-        reportError("Location permission is required to show your position.");
-        return null;
-      }
-
-      const servicesEnabled = await Location.hasServicesEnabledAsync();
-      if (!isCurrentRequest()) return;
-      if (!servicesEnabled) {
-        reportError("Location services are turned off. Enable GPS and try again.");
-        return null;
-      }
-
-      const initialLocation = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-      if (!isCurrentRequest()) return;
-      handleLocation(initialLocation);
-
-      const subscription = await Location.watchPositionAsync(
-        {
+        const firstFix = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
-          distanceInterval: 5,
-          timeInterval: 3000,
-        },
-        (nextLocation) => {
-          if (isCurrentRequest()) handleLocation(nextLocation);
-        },
-        (reason) => {
-          if (!isCurrentRequest()) return;
-          reportError("The GPS signal was lost. Try starting location tracking again.", reason);
-          subscriptionRef.current?.remove();
-          subscriptionRef.current = null;
-        },
-      );
+        });
+        if (!isCurrentRequest()) return null;
+        handleLocation(firstFix);
 
-      if (!isCurrentRequest()) {
-        subscription.remove();
-        return;
+        const subscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            distanceInterval: 5,
+            timeInterval: 3000,
+          },
+          (nextLocation) => {
+            if (isCurrentRequest()) handleLocation(nextLocation);
+          },
+          (reason) => {
+            if (!isCurrentRequest()) return;
+            reportLocationError(
+              "The GPS signal was lost. Try refreshing your location.",
+              reason,
+            );
+            subscriptionRef.current?.remove();
+            subscriptionRef.current = null;
+          },
+        );
+
+        if (!isCurrentRequest()) {
+          subscription.remove();
+          return null;
+        }
+        subscriptionRef.current?.remove();
+        subscriptionRef.current = subscription;
+        setLocationStatus("tracking");
+        return {
+          latitude: firstFix.coords.latitude,
+          longitude: firstFix.coords.longitude,
+        };
+      } catch (cause) {
+        if (!isCurrentRequest()) return null;
+        const detail = cause instanceof Error ? cause.message : "Unknown location error.";
+        reportLocationError("Unable to get your location. Check GPS availability.", detail);
+        return null;
       }
+    })();
+    locationPromiseRef.current = request;
+    void request.finally(() => {
+      if (locationPromiseRef.current === request) locationPromiseRef.current = null;
+    });
+    return request;
+  }, [handleLocation, locationStatus, reportLocationError]);
+
+  const stopWatching = useCallback(() => {
+    locationRequestRef.current += 1;
+    subscriptionRef.current?.remove();
+    subscriptionRef.current = null;
+    setLocationStatus("stopped");
+  }, []);
+
+  useEffect(() => {
+    void startWatching();
+    return () => {
+      locationRequestRef.current += 1;
+      routeRequestRef.current += 1;
+      routeAbortRef.current?.abort();
       subscriptionRef.current?.remove();
-      subscriptionRef.current = subscription;
-      setStatus("tracking");
-      return {
-        latitude: initialLocation.coords.latitude,
-        longitude: initialLocation.coords.longitude,
-      };
-    } catch (cause) {
-      if (!isCurrentRequest()) return;
-      const detail = cause instanceof Error ? cause.message : "Unknown location error.";
-      reportError("Unable to get your location. Check GPS availability and try again.", detail);
-      return null;
-    } finally {
-      if (isCurrentRequest() && subscriptionRef.current === null && status === "requesting") {
-        setStatus((current) => current === "requesting" ? "idle" : current);
-      }
-    }
-  }, [handleLocation, reportError, status]);
+      subscriptionRef.current = null;
+    };
+  }, []);
 
-  const calculateRoute = useCallback(async (
-    /** @type {Coordinate} */ start,
-    /** @type {Coordinate} */ end,
-    /** @type {TravelMode} */ mode,
-  ) => {
+  useEffect(() => {
+    if (Platform.OS === "web" || !location || !mapRef.current || centeredOnLocationRef.current) return;
+    centeredOnLocationRef.current = true;
+    mapRef.current.animateToRegion({
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+      latitudeDelta: 0.012,
+      longitudeDelta: 0.012,
+    }, 350);
+  }, [location]);
+
+  useEffect(() => {
+    if (Platform.OS === "web" || !mapRef.current || !route) return;
+    mapRef.current.fitToCoordinates(route.coordinates, {
+      edgePadding: { top: 44, right: 36, bottom: 44, left: 36 },
+      animated: true,
+    });
+  }, [route]);
+
+  /** @param {TravelMode} [requestedMode] */
+  const findRoute = useCallback(async (requestedMode = travelMode) => {
+    if (!destinationText.trim()) {
+      setRouteError("Enter a destination to plan your route.");
+      return;
+    }
+
     routeAbortRef.current?.abort();
     const controller = new AbortController();
     routeAbortRef.current = controller;
     const requestId = routeRequestRef.current + 1;
     routeRequestRef.current = requestId;
     setRouteLoading(true);
-    setRouteError("");
-    try {
-      const nextRoute = await getPlannedRoute(start, end, mode, controller.signal);
-      if (requestId !== routeRequestRef.current) return;
-      setRoute(nextRoute);
-    } catch (cause) {
-      if (controller.signal.aborted || requestId !== routeRequestRef.current) return;
-      const message = cause instanceof Error ? cause.message : "Unable to calculate the route.";
-      setRouteError(message);
-      callbacksRef.current.onError?.(cause instanceof Error ? cause : new Error(message));
-    } finally {
-      if (requestId === routeRequestRef.current) setRouteLoading(false);
-    }
-  }, []);
-
-  const invalidateRoute = useCallback(() => {
-    routeAbortRef.current?.abort();
-    routeRequestRef.current += 1;
-    setRouteLoading(false);
-  }, []);
-
-  const findRoute = useCallback(async () => {
-    routeAbortRef.current?.abort();
-    const controller = new AbortController();
-    routeAbortRef.current = controller;
-    const requestId = routeRequestRef.current + 1;
-    routeRequestRef.current = requestId;
-    setRouteLoading(true);
-    setRouteError("");
-    setErrorMessage("");
     setRoute(null);
+    setRouteError("");
+
     try {
-      /** @type {Coordinate} */
       let start;
       if (originText.trim().toLowerCase() === "current location") {
-        useCurrentOriginRef.current = true;
-        const currentFix = await startWatching();
-        if (!currentFix) throw new Error("Allow location access to use your current position as the starting point.");
-        start = currentFix;
+        start = await startWatching();
+        if (!start) throw new Error("Your current location is unavailable. Check location permission and try again.");
       } else {
-        useCurrentOriginRef.current = false;
         start = await geocodePlace(originText, controller.signal);
       }
       if (controller.signal.aborted || requestId !== routeRequestRef.current) return;
+
       const end = await geocodePlace(destinationText, controller.signal);
       if (controller.signal.aborted || requestId !== routeRequestRef.current) return;
 
       setOrigin(start);
       setDestination(end);
-      await calculateRoute(start, end, travelMode);
+      const plannedRoute = await getPlannedRoute(start, end, requestedMode, controller.signal);
+      if (controller.signal.aborted || requestId !== routeRequestRef.current) return;
+      setRoute(plannedRoute);
     } catch (cause) {
       if (controller.signal.aborted || requestId !== routeRequestRef.current) return;
-      const message = cause instanceof Error ? cause.message : "Unable to find these locations.";
+      const message = cause instanceof Error ? cause.message : "Unable to plan this route.";
       setRouteError(message);
-      setRouteLoading(false);
       callbacksRef.current.onError?.(cause instanceof Error ? cause : new Error(message));
+    } finally {
+      if (requestId === routeRequestRef.current) setRouteLoading(false);
     }
-  }, [calculateRoute, destinationText, originText, startWatching, travelMode]);
+  }, [destinationText, originText, startWatching, travelMode]);
 
-  useEffect(() => {
-    if (Platform.OS === "web" || !mapRef.current) return;
-    if (route?.coordinates.length) {
-      mapRef.current.fitToCoordinates(route.coordinates, {
-        edgePadding: { top: 56, right: 40, bottom: 56, left: 40 },
-        animated: true,
-      });
-      return;
-    }
-    if (origin && destination) {
-      mapRef.current.fitToCoordinates([origin, destination], {
-        edgePadding: { top: 56, right: 40, bottom: 56, left: 40 },
-        animated: true,
-      });
-      return;
-    }
-    if (origin) {
-      mapRef.current.animateToRegion({
-        ...origin,
-        latitudeDelta: 0.012,
-        longitudeDelta: 0.012,
-      }, 350);
-    }
-  }, [destination, origin, route]);
+  const invalidateRoute = useCallback(() => {
+    routeAbortRef.current?.abort();
+    routeRequestRef.current += 1;
+    setRoute(null);
+    setRouteError("");
+    setRouteLoading(false);
+  }, []);
 
-  const latitude = location?.coords.latitude;
-  const longitude = location?.coords.longitude;
-  const accuracy = location?.coords.accuracy;
-  const updatedAt = location ? new Date(location.timestamp).toLocaleTimeString() : null;
   const maps = Platform.OS === "web" ? null : require("react-native-maps");
   const NativeMapView = maps?.default;
   const Marker = maps?.Marker;
   const Polyline = maps?.Polyline;
-  const selectedMode = ROUTE_MODES.find((item) => item.id === travelMode);
-  const isUsingCurrentLocation = originText.trim().toLowerCase() === "current location";
+  const currentOrigin = originText.trim().toLowerCase() === "current location";
+  const currentCoordinate = location
+    ? { latitude: location.coords.latitude, longitude: location.coords.longitude }
+    : origin;
+  const mapRegion = location
+    ? {
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+      latitudeDelta: 0.08,
+      longitudeDelta: 0.08,
+    }
+    : DEFAULT_REGION;
 
   return h(
     ScrollView,
     {
-      style: styles.scrollView,
-      contentContainerStyle: styles.container,
+      style: styles.scroll,
+      contentContainerStyle: styles.content,
       keyboardShouldPersistTaps: "handled",
     },
     h(
       View,
-      { style: styles.header },
-      h(Text, { style: styles.title }, "Plan your route"),
-      h(Text, { style: styles.subtitle }, status === "tracking" ? "Live GPS tracking is on" : "Search places or use your current location"),
+      { style: styles.top },
+      h(
+        View,
+        { style: styles.heading },
+        h(Text, { style: styles.eyebrow }, "SAFENEST NAVIGATION"),
+        h(Text, { style: styles.title }, "Plan your trip"),
+      ),
+      h(
+        View,
+        { style: styles.searchCard },
+        h(
+          View,
+          { style: styles.locationRail, accessibilityElementsHidden: true },
+          h(View, { style: styles.originDot }),
+          h(View, { style: styles.railLine }),
+          h(View, { style: styles.destinationDot }),
+        ),
+        h(
+          View,
+          { style: styles.fields },
+          h(Text, { style: styles.fieldLabel }, "STARTING POINT"),
+          h(TextInput, {
+            value: originText,
+            onChangeText: (value) => {
+              setOriginText(value);
+              setOrigin(null);
+              invalidateRoute();
+            },
+            placeholder: "Current location or enter a place",
+            placeholderTextColor: "#89969A",
+            accessibilityLabel: "Starting point",
+            returnKeyType: "next",
+            autoCapitalize: "words",
+            style: styles.input,
+          }),
+          h(View, { style: styles.divider }),
+          h(Text, { style: styles.fieldLabel }, "DESTINATION"),
+          h(TextInput, {
+            value: destinationText,
+            onChangeText: (value) => {
+              setDestinationText(value);
+              setDestination(null);
+              invalidateRoute();
+            },
+            placeholder: "e.g. UiTM Jasin or AEON Bandaraya Melaka",
+            placeholderTextColor: "#89969A",
+            accessibilityLabel: "Destination",
+            returnKeyType: "search",
+            autoCapitalize: "words",
+            onSubmitEditing: () => void findRoute(),
+            style: styles.input,
+          }),
+        ),
+      ),
+      h(
+        View,
+        { style: styles.locationLine },
+        h(View, { style: [styles.statusDot, locationStatus === "tracking" ? styles.statusLive : null] }),
+        h(
+          Text,
+          { style: styles.locationStatus },
+          locationStatus === "tracking"
+            ? "Using your live location"
+            : locationStatus === "requesting"
+              ? "Finding your location..."
+              : locationStatus === "error"
+                ? "Location unavailable"
+                : "Location tracking paused",
+        ),
+        locationStatus !== "tracking"
+          ? h(
+            Pressable,
+            {
+              onPress: () => void startWatching(),
+              accessibilityRole: "button",
+              style: styles.refreshButton,
+            },
+            h(Text, { style: styles.refreshText }, "Refresh"),
+          )
+          : h(
+            Pressable,
+            {
+              onPress: stopWatching,
+              accessibilityRole: "button",
+              style: styles.refreshButton,
+            },
+            h(Text, { style: styles.refreshText }, "Pause"),
+          )
+      ),
     ),
     h(
       View,
-      { style: styles.searchCard },
-      h(Text, { style: styles.fieldLabel }, "Starting point"),
-      h(TextInput, {
-        value: originText,
-        onChangeText: (value) => {
-          invalidateRoute();
-          setOriginText(value);
-          useCurrentOriginRef.current = value.trim().toLowerCase() === "current location";
-          setOrigin(null);
-          setRoute(null);
-        },
-        placeholder: "Current Location or enter a place",
-        placeholderTextColor: "#83949C",
-        accessibilityLabel: "Starting point",
-        returnKeyType: "next",
-        style: styles.input,
-      }),
-      h(
-        View,
-        { style: styles.swapRow },
-        h(Text, { style: styles.fieldLabel }, "Destination"),
-        h(
-          Pressable,
-          {
-            onPress: () => {
-              invalidateRoute();
-              const oldOrigin = originText;
-              const oldDestination = destinationText;
-              setOriginText(oldDestination);
-              setDestinationText(oldOrigin);
-              useCurrentOriginRef.current = oldDestination.trim().toLowerCase() === "current location";
-              setOrigin(destination);
-              setDestination(origin);
-              setRoute(null);
-            },
-            accessibilityRole: "button",
-            accessibilityLabel: "Swap starting point and destination",
-            style: styles.swapButton,
-          },
-          h(Text, { style: styles.swapText }, "Swap"),
-        ),
-      ),
-      h(TextInput, {
-        value: destinationText,
-        onChangeText: (value) => {
-          invalidateRoute();
-          setDestinationText(value);
-          setDestination(null);
-          setRoute(null);
-        },
-        placeholder: "Enter a destination, e.g. UiTM Jasin",
-        placeholderTextColor: "#83949C",
-        accessibilityLabel: "Destination",
-        returnKeyType: "search",
-        onSubmitEditing: () => void findRoute(),
-        style: styles.input,
-      }),
-      h(Text, { style: styles.fieldLabel }, "Travel mode"),
-      h(
-        View,
-        { style: styles.modeRow },
-        ...ROUTE_MODES.map((item) => h(
-          Pressable,
-          {
-            key: item.id,
-            onPress: () => {
-              setTravelMode(item.id);
-              if (origin && destination) void calculateRoute(origin, destination, item.id);
-            },
-            accessibilityRole: "button",
-            accessibilityState: { selected: travelMode === item.id },
-            style: [styles.modeButton, travelMode === item.id ? styles.modeButtonSelected : null],
-          },
-          h(Text, { style: [styles.modeText, travelMode === item.id ? styles.modeTextSelected : null] }, item.label),
-        )),
-      ),
-      h(
+      { style: styles.modeRow, accessibilityRole: "toolbar", accessibilityLabel: "Travel mode" },
+      ...TRAVEL_MODES.map((mode) => h(
         Pressable,
         {
-          onPress: () => void findRoute(),
-          disabled: routeLoading || !destinationText.trim(),
-          accessibilityRole: "button",
-          accessibilityState: { disabled: routeLoading || !destinationText.trim(), busy: routeLoading },
-          style: [styles.button, routeLoading || !destinationText.trim() ? styles.disabledButton : null],
-        },
-        routeLoading ? h(ActivityIndicator, { color: "#FFFFFF" }) : null,
-        h(Text, { style: styles.buttonText }, routeLoading ? "Finding route..." : "Find route"),
-      ),
-      isUsingCurrentLocation
-        ? h(
-          Pressable,
-          {
-            onPress: () => {
-              useCurrentOriginRef.current = true;
-              setOriginText("Current Location");
-              void startWatching();
-            },
-            disabled: status === "requesting" || status === "tracking",
-            accessibilityRole: "button",
-            style: styles.currentLocationButton,
+          key: mode.id,
+          onPress: () => {
+            setTravelMode(mode.id);
+            if (route) void findRoute(mode.id);
           },
-          h(Text, { style: styles.currentLocationText }, status === "tracking" ? "Current location is updating" : "Use current location"),
-        )
-        : null,
+          accessibilityRole: "button",
+          accessibilityState: { selected: travelMode === mode.id },
+          style: [styles.modeChip, travelMode === mode.id ? styles.modeChipSelected : null],
+        },
+        h(Text, { style: [styles.modeText, travelMode === mode.id ? styles.modeTextSelected : null] }, mode.label),
+      )),
     ),
-    NativeMapView && Marker
+    NativeMapView && Marker && Polyline
       ? h(
         View,
-        { style: styles.mapContainer },
+        { style: styles.mapFrame },
         h(
           NativeMapView,
           /** @type {React.ComponentProps<typeof NativeMapView> & { ref: React.Ref<MapHandle> }} */ ({
             ref: mapRef,
             style: styles.map,
-            initialRegion: region,
+            initialRegion: mapRegion,
             showsUserLocation: true,
-            showsMyLocationButton: true,
+            showsMyLocationButton: false,
             showsCompass: true,
-            accessibilityLabel: "Map showing the route between the selected locations",
+            accessibilityLabel: "Navigation map showing the current location and planned route",
           }),
-          origin ? h(Marker, { coordinate: origin, title: isUsingCurrentLocation ? "Current location" : "Starting point" }) : null,
-          destination ? h(Marker, { coordinate: destination, title: "Destination" }) : null,
-          route && Polyline
+          !currentOrigin && origin
+            ? h(Marker, { coordinate: origin, title: "Starting point" })
+            : null,
+          destination
+            ? h(Marker, { coordinate: destination, title: destinationText || "Destination" })
+            : null,
+          route
             ? h(Polyline, {
               coordinates: route.coordinates,
-              strokeColor: "#0F7D86",
-              strokeWidth: 5,
+              strokeColor: "#187C78",
+              strokeWidth: 6,
               lineCap: "round",
               lineJoin: "round",
             })
             : null,
         ),
+        h(
+          View,
+          { style: styles.mapBadge },
+          h(View, { style: styles.statusDot }),
+          h(Text, { style: styles.mapBadgeText }, locationStatus === "tracking" ? "LIVE" : "MAP"),
+        ),
+        h(
+          Pressable,
+          {
+            onPress: () => {
+              if (currentCoordinate) {
+                mapRef.current?.animateToRegion({
+                  ...currentCoordinate,
+                  latitudeDelta: 0.012,
+                  longitudeDelta: 0.012,
+                }, 350);
+              } else {
+                void startWatching();
+              }
+            },
+            accessibilityRole: "button",
+            accessibilityLabel: "Center map on current location",
+            style: styles.centerButton,
+          },
+          h(Text, { style: styles.centerGlyph }, "⌖"),
+        ),
       )
       : h(
         View,
-        { style: styles.mapFallback, accessibilityRole: "summary" },
-        h(Text, { style: styles.fallbackTitle }, Platform.OS === "web" ? "Map preview unavailable on web" : "Waiting for GPS location"),
-        route
-          ? h(Text, { style: styles.coordinates }, `${route.summary} · ${formatDistance(route.distanceMeters)}`)
-          : origin && destination
-            ? h(Text, { style: styles.coordinates }, `${origin.latitude.toFixed(5)}, ${origin.longitude.toFixed(5)} → ${destination.latitude.toFixed(5)}, ${destination.longitude.toFixed(5)}`)
-            : h(Text, { style: styles.fallbackText }, "Your route map and location markers will appear here."),
-        Platform.OS === "web"
-          ? h(Text, { style: styles.fallbackText }, "Place search and route estimates work here; the interactive map is available in the iOS and Android app.")
-          : null,
+        { style: [styles.mapFrame, styles.mapFallback] },
+        h(Text, { style: styles.fallbackGlyph }, "⌖"),
+        h(Text, { style: styles.fallbackTitle }, Platform.OS === "web" ? "Map preview is available in the mobile app" : "Map is loading"),
+        h(
+          Text,
+          { style: styles.fallbackText },
+          Platform.OS === "web"
+            ? "Place search and route estimates remain available here."
+            : "Your map will appear as soon as the native map is ready.",
+        ),
       ),
     route
       ? h(
         View,
-        { style: styles.routeCard },
+        { style: styles.tripCard },
         h(
           View,
-          { style: styles.routeStats },
-          h(View, null,
-            h(Text, { style: styles.routePrimary }, formatDuration(route.durationSeconds)),
-            h(Text, { style: styles.routeSecondary }, formatDistance(route.distanceMeters)),
+          { style: styles.tripTopline },
+          h(Text, { style: styles.tripLabel }, `${route.mode === "driving" ? "SUGGESTED DRIVE" : `ESTIMATED ${route.mode.toUpperCase()}`}`),
+          h(Text, { style: styles.routeSummary, numberOfLines: 1 }, route.summary),
+        ),
+        h(
+          View,
+          { style: styles.statsRow },
+          h(
+            View,
+            { style: styles.stat },
+            h(Text, { style: styles.statValue }, formatDistance(route.distanceMeters)),
+            h(Text, { style: styles.statLabel }, "DISTANCE"),
           ),
-          h(View, { style: styles.etaContainer },
-            h(Text, { style: styles.routeSecondary }, "ETA"),
-            h(Text, { style: styles.etaText }, formatEta(route.durationSeconds)),
+          h(View, { style: styles.statDivider }),
+          h(
+            View,
+            { style: styles.stat },
+            h(Text, { style: styles.statValue }, formatDuration(route.durationSeconds)),
+            h(Text, { style: styles.statLabel }, "DRIVE TIME"),
+          ),
+          h(View, { style: styles.statDivider }),
+          h(
+            View,
+            { style: styles.stat },
+            h(Text, { style: styles.statValue }, formatEta(route.durationSeconds)),
+            h(Text, { style: styles.statLabel }, "ARRIVAL"),
           ),
         ),
-        h(Text, { style: styles.routeSummary }, route.summary),
-        h(Text, { style: styles.routeNote }, route.source === "OSRM"
-          ? "Suggested driving route · OSRM public routing · no live traffic or toll data"
-          : `${selectedMode?.label ?? "Route"} estimate only; no live path provider is connected for this mode.`),
-        h(Text, { style: styles.routeNote }, "Place search uses device geocoding, or © OpenStreetMap contributors on web."),
+        h(
+          Text,
+          { style: styles.disclaimer },
+          route.source === "OSRM"
+            ? "Suggested driving route. Live traffic and toll data are not included."
+            : "Approximate distance and time with a straight-line map connection; no walking or transit route provider is connected.",
+        ),
       )
       : null,
     routeError
-      ? h(View, { style: styles.errorContainer, accessibilityLiveRegion: "polite" }, h(Text, { style: styles.errorText }, routeError))
-      : null,
-    location
       ? h(
         View,
-        { style: styles.metrics },
-        h(Text, { style: styles.metric }, `GPS accuracy: ${accuracy == null ? "unknown" : `±${Math.round(accuracy)} m`}`),
-        h(Text, { style: styles.metric }, `Current coordinates: ${latitude?.toFixed(6)}, ${longitude?.toFixed(6)}`),
-        h(Text, { style: styles.metric }, `Last update: ${updatedAt}`),
-        h(Text, { style: styles.metric }, `Tracking status: ${status === "tracking" ? "Active" : "Stopped"}`),
+        { style: styles.errorCard, accessibilityLiveRegion: "polite" },
+        h(Text, { style: styles.errorTitle }, "Couldn't plan this route"),
+        h(Text, { style: styles.errorText }, routeError),
       )
       : null,
-    errorMessage
+    locationError
       ? h(
         View,
-        { style: styles.errorContainer, accessibilityLiveRegion: "polite" },
-        h(Text, { style: styles.errorText }, errorMessage),
+        { style: styles.locationError, accessibilityLiveRegion: "polite" },
+        h(Text, { style: styles.errorText }, locationError),
         permissionBlocked && Platform.OS !== "web"
           ? h(
             Pressable,
-            { onPress: () => void Linking.openSettings(), accessibilityRole: "button", style: styles.settingsButton },
-            h(Text, { style: styles.settingsButtonText }, "Open app settings"),
+            {
+              onPress: () => void Linking.openSettings(),
+              accessibilityRole: "button",
+              style: styles.settingsButton,
+            },
+            h(Text, { style: styles.settingsText }, "Open settings"),
           )
           : null,
       )
       : null,
     h(
+      Pressable,
+      {
+        onPress: () => void findRoute(),
+        disabled: routeLoading || !destinationText.trim(),
+        accessibilityRole: "button",
+        accessibilityState: { disabled: routeLoading || !destinationText.trim(), busy: routeLoading },
+        style: [styles.planButton, routeLoading || !destinationText.trim() ? styles.planButtonDisabled : null],
+      },
+      routeLoading ? h(ActivityIndicator, { color: "#FFFFFF" }) : null,
+      h(Text, { style: styles.planButtonText }, routeLoading ? "Planning route..." : "Show route"),
+    ),
+    h(
       View,
-      { style: styles.actions },
-      status === "tracking"
-        ? h(
-          Pressable,
-          { onPress: stopWatching, accessibilityRole: "button", style: [styles.button, styles.stopButton] },
-          h(Text, { style: styles.buttonText }, "Stop tracking"),
-        )
-        : h(
-          Pressable,
-          {
-            onPress: () => void startWatching(),
-            disabled: status === "requesting",
-            accessibilityRole: "button",
-            accessibilityState: { disabled: status === "requesting", busy: status === "requesting" },
-            style: [styles.button, status === "requesting" ? styles.disabledButton : null],
-          },
-          status === "requesting"
-            ? h(ActivityIndicator, { color: "#FFFFFF" })
-            : null,
-          h(Text, { style: styles.buttonText }, status === "requesting" ? "Getting location..." : "Use current location"),
-        ),
+      { style: styles.footer },
+      h(Text, { style: styles.footerText }, "Place search · Driving route by OSRM"),
+      Platform.OS === "web"
+        ? h(Text, { style: styles.footerText }, "© OpenStreetMap contributors")
+        : null,
     ),
   );
 }
 
 const styles = StyleSheet.create({
-  scrollView: {
+  scroll: {
     flex: 1,
+    backgroundColor: "#F4F7F6",
   },
-  container: {
+  content: {
     flexGrow: 1,
-    width: "100%",
-    backgroundColor: "#F4F8FB",
-    padding: 16,
-    gap: 12,
-    paddingBottom: 32,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 28,
+    gap: 14,
   },
-  header: {
+  top: {
+    gap: 14,
+  },
+  heading: {
     gap: 4,
   },
-  title: {
-    color: "#17313B",
-    fontSize: 22,
-    fontWeight: "700",
+  eyebrow: {
+    color: "#68817F",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1.5,
   },
-  subtitle: {
-    color: "#526875",
-    fontSize: 14,
+  title: {
+    color: "#172B2A",
+    fontSize: 27,
+    fontWeight: "700",
+    letterSpacing: -0.5,
   },
   searchCard: {
-    gap: 10,
-    padding: 14,
-    borderRadius: 16,
+    flexDirection: "row",
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 15,
+    borderWidth: 1,
+    borderColor: "#E6ECEA",
+    borderRadius: 18,
     backgroundColor: "#FFFFFF",
+    shadowColor: "#223B39",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 2,
+  },
+  locationRail: {
+    width: 14,
+    alignItems: "center",
+    paddingTop: 5,
+    paddingBottom: 4,
+  },
+  originDot: {
+    width: 10,
+    height: 10,
+    borderWidth: 2,
+    borderColor: "#16827D",
+    borderRadius: 5,
+    backgroundColor: "#FFFFFF",
+  },
+  railLine: {
+    flex: 1,
+    minHeight: 22,
+    width: 1,
+    backgroundColor: "#C8D4D1",
+  },
+  destinationDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 3,
+    backgroundColor: "#F17856",
+  },
+  fields: {
+    flex: 1,
+    gap: 5,
   },
   fieldLabel: {
-    color: "#17313B",
-    fontSize: 13,
-    fontWeight: "700",
+    color: "#7A8C89",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 1,
   },
   input: {
-    minHeight: 48,
-    paddingHorizontal: 12,
-    borderWidth: 1,
-    borderColor: "#D5E0E4",
-    borderRadius: 10,
-    color: "#17313B",
-    backgroundColor: "#FFFFFF",
+    minHeight: 36,
+    padding: 0,
+    color: "#1A302F",
     fontSize: 15,
+    fontWeight: "600",
   },
-  swapRow: {
+  divider: {
+    height: 1,
+    marginVertical: 4,
+    backgroundColor: "#EDF1F0",
+  },
+  locationLine: {
+    minHeight: 26,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: 8,
+    paddingHorizontal: 2,
   },
-  swapButton: {
+  statusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "#A6B3B0",
+  },
+  statusLive: {
+    backgroundColor: "#25A37A",
+  },
+  locationStatus: {
+    flex: 1,
+    color: "#627470",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  refreshButton: {
     paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingVertical: 5,
   },
-  swapText: {
-    color: "#0B5F69",
-    fontSize: 13,
+  refreshText: {
+    color: "#16827D",
+    fontSize: 12,
     fontWeight: "700",
   },
   modeRow: {
     flexDirection: "row",
     gap: 8,
   },
-  modeButton: {
-    flex: 1,
-    minHeight: 40,
+  modeChip: {
+    minHeight: 34,
+    minWidth: 76,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 4,
+    paddingHorizontal: 13,
     borderWidth: 1,
-    borderColor: "#D5E0E4",
-    borderRadius: 10,
+    borderColor: "#E0E8E5",
+    borderRadius: 18,
     backgroundColor: "#FFFFFF",
   },
-  modeButtonSelected: {
-    borderColor: "#0F7D86",
-    backgroundColor: "#E8F5F5",
+  modeChipSelected: {
+    borderColor: "#147B76",
+    backgroundColor: "#E5F2EF",
   },
   modeText: {
-    color: "#526875",
-    fontSize: 12,
+    color: "#697B77",
+    fontSize: 11,
     fontWeight: "600",
   },
   modeTextSelected: {
-    color: "#0B5F69",
-  },
-  currentLocationButton: {
-    alignSelf: "flex-start",
-    paddingVertical: 4,
-  },
-  currentLocationText: {
-    color: "#0B5F69",
-    fontSize: 14,
+    color: "#126D68",
     fontWeight: "700",
   },
-  mapContainer: {
-    height: 320,
+  mapFrame: {
+    height: 340,
     overflow: "hidden",
-    borderRadius: 16,
-    backgroundColor: "#E4EEF0",
+    borderRadius: 20,
+    backgroundColor: "#E6EFEC",
   },
   map: {
     flex: 1,
   },
+  mapBadge: {
+    position: "absolute",
+    top: 12,
+    left: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: "#FFFFFF",
+    shadowColor: "#1B302D",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.13,
+    shadowRadius: 5,
+    elevation: 3,
+  },
+  mapBadgeText: {
+    color: "#334B47",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+  },
+  centerButton: {
+    position: "absolute",
+    right: 12,
+    bottom: 12,
+    width: 42,
+    height: 42,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 21,
+    backgroundColor: "#FFFFFF",
+    shadowColor: "#1B302D",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.13,
+    shadowRadius: 5,
+    elevation: 3,
+  },
+  centerGlyph: {
+    color: "#16827D",
+    fontSize: 25,
+    lineHeight: 29,
+  },
   mapFallback: {
-    minHeight: 260,
     alignItems: "center",
     justifyContent: "center",
     padding: 24,
-    gap: 10,
-    borderRadius: 16,
-    backgroundColor: "#E4EEF0",
+    gap: 8,
+  },
+  fallbackGlyph: {
+    color: "#16827D",
+    fontSize: 30,
   },
   fallbackTitle: {
-    color: "#17313B",
-    fontSize: 17,
+    color: "#253A37",
+    fontSize: 15,
     fontWeight: "700",
     textAlign: "center",
   },
   fallbackText: {
-    color: "#526875",
-    fontSize: 14,
+    maxWidth: 270,
+    color: "#71827F",
+    fontSize: 12,
+    lineHeight: 18,
     textAlign: "center",
   },
-  coordinates: {
-    color: "#0B5F69",
-    fontSize: 16,
-    fontWeight: "600",
-    textAlign: "center",
-  },
-  routeCard: {
-    gap: 9,
-    padding: 14,
-    borderRadius: 14,
+  tripCard: {
+    gap: 15,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#E6ECEA",
+    borderRadius: 18,
     backgroundColor: "#FFFFFF",
   },
-  routeStats: {
+  tripTopline: {
+    gap: 4,
+  },
+  tripLabel: {
+    color: "#16827D",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 1.1,
+  },
+  routeSummary: {
+    color: "#61736F",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  statsRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  routePrimary: {
-    color: "#17313B",
-    fontSize: 21,
+  stat: {
+    flex: 1,
+    gap: 4,
+  },
+  statValue: {
+    color: "#1A302F",
+    fontSize: 18,
     fontWeight: "700",
+    letterSpacing: -0.3,
   },
-  routeSecondary: {
-    color: "#526875",
-    fontSize: 14,
+  statLabel: {
+    color: "#84938F",
+    fontSize: 8,
+    fontWeight: "800",
+    letterSpacing: 0.8,
   },
-  etaContainer: {
-    alignItems: "flex-end",
+  statDivider: {
+    width: 1,
+    height: 32,
+    marginHorizontal: 7,
+    backgroundColor: "#E9EEEC",
   },
-  etaText: {
-    color: "#0B5F69",
-    fontSize: 17,
-    fontWeight: "700",
+  disclaimer: {
+    color: "#899693",
+    fontSize: 10,
+    lineHeight: 15,
   },
-  routeSummary: {
-    color: "#17313B",
-    fontSize: 15,
-    fontWeight: "600",
-  },
-  routeNote: {
-    color: "#526875",
-    fontSize: 12,
-    lineHeight: 17,
-  },
-  metrics: {
+  errorCard: {
     gap: 5,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: "#FFFFFF",
+    padding: 13,
+    borderWidth: 1,
+    borderColor: "#F1D2CA",
+    borderRadius: 13,
+    backgroundColor: "#FFF7F4",
   },
-  metric: {
-    color: "#17313B",
-    fontSize: 14,
-  },
-  errorContainer: {
+  locationError: {
     gap: 8,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: "#FDE7E4",
+    padding: 13,
+    borderRadius: 13,
+    backgroundColor: "#FFF7F4",
+  },
+  errorTitle: {
+    color: "#9C4031",
+    fontSize: 13,
+    fontWeight: "700",
   },
   errorText: {
-    color: "#B3261E",
-    fontSize: 14,
+    color: "#9C4031",
+    fontSize: 12,
+    lineHeight: 18,
   },
   settingsButton: {
     alignSelf: "flex-start",
-    paddingVertical: 6,
+    paddingVertical: 4,
   },
-  settingsButtonText: {
-    color: "#0B5F69",
-    fontSize: 14,
+  settingsText: {
+    color: "#16827D",
+    fontSize: 12,
     fontWeight: "700",
   },
-  actions: {
-    gap: 8,
-  },
-  button: {
-    minHeight: 50,
-    borderRadius: 14,
-    backgroundColor: "#0F7D86",
+  planButton: {
+    minHeight: 52,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
-    paddingHorizontal: 16,
+    gap: 9,
+    borderRadius: 15,
+    backgroundColor: "#147B76",
   },
-  stopButton: {
-    backgroundColor: "#B3261E",
+  planButtonDisabled: {
+    opacity: 0.48,
   },
-  disabledButton: {
-    opacity: 0.65,
-  },
-  buttonText: {
+  planButtonText: {
     color: "#FFFFFF",
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "700",
+  },
+  footer: {
+    alignItems: "center",
+    gap: 3,
+    paddingTop: 1,
+  },
+  footerText: {
+    color: "#9AA6A3",
+    fontSize: 9,
+    textAlign: "center",
   },
 });
