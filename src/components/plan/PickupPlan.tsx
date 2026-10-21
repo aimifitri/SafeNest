@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { View } from "react-native";
 
 import { Icon } from "../navigation/Icon";
@@ -14,7 +14,8 @@ import { Sheet } from "../shared/Sheet";
 import { TimeWheelPicker } from "../shared/TimeWheel";
 import { StatusPill } from "../shared/StatusPill";
 import { mockData } from "../shared/mockData";
-import { Banner, Btn, Dl, Lead, Press, Rise, Row, T, Tag } from "../shared/ui";
+import { isUuid } from "../shared/backupApi";
+import { Banner, Btn, Dl, Err, Lead, Press, Rise, Row, T, Tag } from "../shared/ui";
 import type { BackupRequestState, VerificationState, Weekday } from "../shared/types";
 
 const weekdays: { key: Weekday; label: string }[] = [
@@ -33,8 +34,13 @@ export function PickupPlan() {
   const {
     theme, trustedHelpers, temporaryDismissal, setTemporaryDismissal,
     backupRequest, requestBackupPickup, respondToBackupPickup, resetBackupRequest,
+    backupLive, backupBusy, backupError, dismissBackupError, completeBackupPickup,
     weeklySchedule, updateWeekdayTime,
   } = useAppContext();
+  // Real request (stored, answered by the helper's own phone) or the local demo.
+  const isLive = !backupRequest.simulated;
+  // Do not leave an old error on screen after leaving this tab.
+  useEffect(() => () => dismissBackupError(), []); // eslint-disable-line react-hooks/exhaustive-deps
   const colors = theme.colors;
   const { child, school, pickupStatus, teacherPhotoVerification } = mockData;
   const weekdayNumber = new Date().getDay();
@@ -128,20 +134,32 @@ export function PickupPlan() {
     setNotice(`Today is back to the regular time, ${originalDismissal}.`);
   };
 
-  const requestBackup = () => {
-    if (!requestHelper) return;
-    requestBackupPickup(requestHelper.id);
-    setNotice(`Demo request sent to ${requestHelper.name}.`);
+  const requestBackup = async () => {
+    if (!requestHelper || backupBusy) return;
+    const willBeLive = backupLive && isUuid(requestHelper.id);
+    const ok = await requestBackupPickup(requestHelper.id);
+    // On failure the card below shows why. Never say "sent" unless the server confirmed it.
+    if (ok) setNotice(willBeLive ? `Request sent to ${requestHelper.name}.` : `Demo request sent to ${requestHelper.name}.`);
   };
 
-  const selectBackupHelper = (helperId: string) => {
-    if (isBackupResolved) return;
+  const selectBackupHelper = async (helperId: string) => {
+    if (isBackupResolved || backupBusy) return;
     setDraftHelperId(helperId);
     if (backupState === "requested") {
       const helper = availableHelpers.find((item) => item.id === helperId);
-      requestBackupPickup(helperId);
-      setNotice(helper ? `Demo request updated to ${helper.name}.` : "Demo backup request updated.");
+      const ok = await requestBackupPickup(helperId);
+      if (ok) setNotice(helper ? `Request ${isLive ? "moved" : "updated"} to ${helper.name}.` : "Backup request updated.");
     }
+  };
+
+  const clearBackup = async () => {
+    const ok = await resetBackupRequest();
+    if (ok) setNotice(isLive && backupState !== "declined" ? "Backup request cancelled." : "Backup request cleared.");
+  };
+
+  const markCollected = async () => {
+    const ok = await completeBackupPickup();
+    if (ok) setNotice("Pickup marked as done.");
   };
 
   const respondToBackup = (accepted: boolean) => {
@@ -218,7 +236,7 @@ export function PickupPlan() {
         <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 12 }}>
           <View style={{ flex: 1, minWidth: 0 }}>
             <T s={1.05} w={700}>{backupState === "idle" ? "Can't collect today?" : "Backup request"}</T>
-            <T c="muted" lh={1.4}>{backupState === "idle" ? "Pick a helper and ask them." : backupState === "requested" ? "Waiting for the helper to answer." : backupState === "accepted" ? "The helper will collect." : "The helper cannot collect."}</T>
+            <T c="muted" lh={1.4}>{backupState === "idle" ? "Pick a helper and ask them." : backupState === "requested" ? `Waiting for ${backupHelper?.name ?? "the helper"} to answer.` : backupState === "accepted" ? `${backupHelper?.name ?? "The helper"} will collect.` : `${backupHelper?.name ?? "The helper"} cannot collect.`}</T>
           </View>
           <Rise key={backupState} kind="swap">
             <StatusPill label={backupStateLabel(backupState)} tone={backupState === "accepted" ? "success" : backupState === "declined" ? "danger" : backupState === "requested" ? "warning" : "neutral"} />
@@ -240,8 +258,8 @@ export function PickupPlan() {
                   role="radio"
                   label={`${helper.name}, ${helper.role}`}
                   state={{ checked: picked, disabled: isBackupResolved }}
-                  disabled={isBackupResolved}
-                  onPress={() => selectBackupHelper(helper.id)}
+                  disabled={isBackupResolved || backupBusy}
+                  onPress={() => void selectBackupHelper(helper.id)}
                   style={{
                     minHeight: 56, flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 14, borderWidth: 1.5,
                     borderColor: picked ? colors.primary : colors.line, backgroundColor: picked ? colors.primarySoft : colors.background,
@@ -260,8 +278,14 @@ export function PickupPlan() {
             })}
           </View>
         ) : null}
-        {backupState === "idle" || backupState === "accepted" || backupState === "declined" ? (
-          <PrimaryButton label={backupState === "idle" ? "Request backup pickup" : "Ask again"} disabled={!requestHelper} onPress={requestBackup} />
+        {isLive && backupState === "accepted" ? (
+          <Btn kind="p" loading={backupBusy} disabled={backupBusy} onPress={() => void markCollected()}>
+            Mark pickup as done
+          </Btn>
+        ) : backupState === "idle" || backupState === "accepted" || backupState === "declined" ? (
+          <PrimaryButton label={backupBusy ? "Sending..." : backupState === "idle" ? "Request backup pickup" : "Ask again"} disabled={!requestHelper || backupBusy} onPress={() => void requestBackup()} />
+        ) : isLive ? (
+          <T s={0.9} lh={1.4} c="muted">{backupHelper?.name ?? "The helper"} will answer on their own phone. This updates here by itself.</T>
         ) : (
           <View style={{ gap: 8 }}>
             <T s={0.85} w={700} c="muted">Simulate the helper's answer:</T>
@@ -271,8 +295,15 @@ export function PickupPlan() {
             </View>
           </View>
         )}
-        {backupState !== "idle" ? <SecondaryButton label="Clear request" onPress={resetBackupRequest} /> : null}
-        <T s={0.8} lh={1.4} c="muted">Simulated. No one is contacted.</T>
+        {backupError ? <Err text={backupError} /> : null}
+        {backupState !== "idle" ? (
+          <SecondaryButton
+            label={isLive ? (backupState === "declined" ? "Dismiss" : "Cancel request") : "Clear request"}
+            disabled={backupBusy}
+            onPress={() => void clearBackup()}
+          />
+        ) : null}
+        <T s={0.8} lh={1.4} c="muted">{isLive ? "Sent through SafeNest. Only the helper you picked can answer." : "Simulated. No one is contacted."}</T>
       </Card>
 
       <SectionHeading title="Teacher check" />

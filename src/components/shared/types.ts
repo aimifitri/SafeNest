@@ -58,10 +58,12 @@ export interface PickupStatus {
 }
 
 export interface BackupRequest {
+  id?: string;
   state: BackupRequestState;
   helperId?: PersonId;
   requestedAt?: string;
-  simulated: true;
+  // true = local demo only. false = stored in Supabase and answered by the real helper.
+  simulated: boolean;
 }
 
 export interface TeacherPhotoVerification {

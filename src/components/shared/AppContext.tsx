@@ -1,13 +1,16 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
 import type { PropsWithChildren } from "react";
-import { useColorScheme } from "react-native";
+import { AppState, useColorScheme } from "react-native";
 
 import type {
   FontStyle,
@@ -22,9 +25,22 @@ import {
   themeTokens,
 } from "./theme";
 
+import { useAuth } from "./AuthContext";
+import {
+  cancelRequest,
+  completeRequest,
+  createBackupRequest,
+  fetchFirstChildId,
+  fetchLatestRequest,
+  isUuid,
+  subscribeToRequests,
+  toUiRequest,
+} from "./backupApi";
+import type { ApiResult } from "./backupApi";
 import { mockData } from "./mockData";
 
 import type {
+  BackupRequest,
   BackupRequestState,
   Caregiver,
   ContactState,
@@ -72,15 +88,25 @@ interface AppContextValue {
     override: TemporaryDismissal | null
   ) => void;
 
-  backupRequest: typeof mockData.backupRequest;
-  requestBackupPickup: (helperId?: string) => void;
+  // backupRequest.simulated === true: local demo. false: stored in Supabase and answered by the real helper.
+  // The action functions resolve true only after the server confirmed the change.
+  backupRequest: BackupRequest;
+  // true when this family has a stored child, so requests to real helpers go through Supabase.
+  backupLive: boolean;
+  backupBusy: boolean;
+  backupError: string | null;
+  dismissBackupError: () => void;
+  requestBackupPickup: (helperId?: string) => Promise<boolean>;
+  // Demo only. Ignored for real requests, which only the chosen helper can answer.
   respondToBackupPickup: (
     state: Extract<
       BackupRequestState,
       "accepted" | "declined"
     >
   ) => void;
-  resetBackupRequest: () => void;
+  // Cancels an open request (or hides an answered one).
+  resetBackupRequest: () => Promise<boolean>;
+  completeBackupPickup: () => Promise<boolean>;
 
   trustedHelpers: TrustedHelper[];
   setTrustedHelperState: (
@@ -162,8 +188,118 @@ export function AppProvider({
     setTemporaryDismissal,
   ] = useState<TemporaryDismissal | null>(null);
 
+  const { session, familyId } = useAuth();
   const [backupRequest, setBackupRequest] =
-    useState(mockData.backupRequest);
+    useState<BackupRequest>(mockData.backupRequest);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupError, setBackupError] = useState<string | null>(null);
+  const [dbChildId, setDbChildId] = useState<string | null>(null);
+  const backupRef = useRef<BackupRequest>(backupRequest);
+  const busyRef = useRef(false);
+  const dismissedId = useRef<string | null>(null);
+
+  useEffect(() => {
+    backupRef.current = backupRequest;
+  }, [backupRequest]);
+
+  // The child stored for this family. Without one, backup requests stay a local demo.
+  const userId = session?.user.id;
+  useEffect(() => {
+    if (!familyId || !userId) {
+      setDbChildId(null);
+      return;
+    }
+    let active = true;
+    void fetchFirstChildId(familyId).then((id) => {
+      if (active) setDbChildId(id);
+    });
+    return () => {
+      active = false;
+    };
+  }, [familyId, userId]);
+
+  const refreshBackup = useCallback(async () => {
+    if (!dbChildId) return;
+    const res = await fetchLatestRequest(dbChildId);
+    if (!res.ok) {
+      // Keep the last known state. Do not pretend it is fresh.
+      setBackupError(res.error);
+      return;
+    }
+    const current = backupRef.current;
+    // Do not wipe a demo that is in progress.
+    if (current.simulated && current.state !== "idle") return;
+    setBackupRequest(toUiRequest(res.data, dismissedId.current));
+  }, [dbChildId]);
+
+  // Load, then follow changes live. Also re-check when the app returns to the foreground.
+  useEffect(() => {
+    if (!dbChildId) return;
+    void refreshBackup();
+    const unsubscribe = subscribeToRequests(dbChildId, () => void refreshBackup());
+    const appState = AppState.addEventListener("change", (next) => {
+      if (next === "active") void refreshBackup();
+    });
+    return () => {
+      unsubscribe();
+      appState.remove();
+      dismissedId.current = null;
+      setBackupRequest(mockData.backupRequest);
+    };
+  }, [dbChildId, refreshBackup]);
+
+  // One server action at a time, so a double tap cannot send two requests.
+  const runLive = async (action: () => Promise<ApiResult<unknown>>): Promise<boolean> => {
+    if (busyRef.current) return false;
+    busyRef.current = true;
+    setBackupBusy(true);
+    setBackupError(null);
+    try {
+      const res = await action();
+      if (!res.ok) setBackupError(res.error);
+      await refreshBackup();
+      return res.ok;
+    } finally {
+      busyRef.current = false;
+      setBackupBusy(false);
+    }
+  };
+
+  const requestBackupPickup = async (helperId?: string): Promise<boolean> => {
+    if (dbChildId && isUuid(helperId)) {
+      const current = backupRef.current;
+      return runLive(async () => {
+        // Switching helper: close the open request first.
+        if (current.id && current.state === "requested" && current.helperId !== helperId) {
+          const cancelled = await cancelRequest(current.id);
+          if (!cancelled.ok) return cancelled;
+        }
+        return createBackupRequest(dbChildId, helperId);
+      });
+    }
+    setBackupRequest({ state: "requested", helperId, simulated: true });
+    return true;
+  };
+
+  const resetBackupRequest = async (): Promise<boolean> => {
+    const current = backupRef.current;
+    if (current.simulated || !current.id) {
+      setBackupRequest(mockData.backupRequest);
+      return true;
+    }
+    if (current.state === "declined") {
+      dismissedId.current = current.id;
+      setBackupRequest({ state: "idle", simulated: false });
+      return true;
+    }
+    return runLive(() => cancelRequest(current.id as string));
+  };
+
+  const completeBackupPickup = async (): Promise<boolean> => {
+    const current = backupRef.current;
+    if (current.simulated || !current.id || current.state !== "accepted") return false;
+    return runLive(() => completeRequest(current.id as string));
+  };
 
   const [trustedHelpers, setTrustedHelpers] =
     useState<TrustedHelper[]>(() =>
@@ -215,21 +351,19 @@ export function AppProvider({
 
       // Existing backup pickup behaviour.
       backupRequest,
-      requestBackupPickup: (helperId) =>
-        setBackupRequest({
-          state: "requested",
-          helperId,
-          simulated: true,
-        }),
+      backupLive: dbChildId !== null,
+      backupBusy,
+      backupError,
+      dismissBackupError: () => setBackupError(null),
+      requestBackupPickup,
 
       respondToBackupPickup: (state) =>
-        setBackupRequest((current) => ({
-          ...current,
-          state,
-        })),
+        setBackupRequest((current) =>
+          current.simulated ? { ...current, state } : current
+        ),
 
-      resetBackupRequest: () =>
-        setBackupRequest(mockData.backupRequest),
+      resetBackupRequest,
+      completeBackupPickup,
 
       // Existing trusted helper behaviour.
       trustedHelpers,
@@ -252,6 +386,10 @@ export function AppProvider({
       weeklySchedule,
       temporaryDismissal,
       backupRequest,
+      backupBusy,
+      backupError,
+      dbChildId,
+      refreshBackup,
       trustedHelpers,
       theme,
     ]

@@ -13,7 +13,8 @@ import type { MapDot } from "../shared/MapView";
 import { MapView } from "../shared/MapView";
 import { mockData } from "../shared/mockData";
 import { StatusPill } from "../shared/StatusPill";
-import { Btn, Glass, Press, Rise, SIc, T, useColors, useEffectiveScale, useTone } from "../shared/ui";
+import { Btn, Err, Glass, Press, Rise, SIc, T, useColors, useEffectiveScale, useTone } from "../shared/ui";
+import { HelperAssignments } from "./HelperAssignments";
 import { DemoSheet, FullMap } from "./DemoControls";
 import { DeviceLocationModal } from "./DeviceLocation";
 
@@ -31,7 +32,7 @@ const BASE_XY: Record<string, [number, number]> = {
 };
 
 export function TodayDashboard() {
-  const { theme, selectedCaregiver, weeklySchedule, temporaryDismissal, trustedHelpers, backupRequest, requestBackupPickup } = useAppContext();
+  const { theme, selectedCaregiver, weeklySchedule, temporaryDismissal, trustedHelpers, backupRequest, requestBackupPickup, backupBusy, backupError } = useAppContext();
   const { child, school, familyMembers, pickupStatus: basePickupStatus, schedule } = mockData;
   const scheduledCollector = [...familyMembers, ...trustedHelpers].find((person) => person.id === basePickupStatus.collectorId);
   const caregiver = selectedCaregiver?.name ?? "Abu";
@@ -88,15 +89,17 @@ export function TodayDashboard() {
           : `If ${collectorName} cannot make it, ask an approved helper.`;
   const canRequestBackup = backupRequest.state === "idle" || backupRequest.state === "declined";
   const requestBackup = () => {
+    if (backupBusy) return;
     const helper = trustedHelpers.find((candidate) => candidate.state === "active");
-    requestBackupPickup(helper?.id);
+    void requestBackupPickup(helper?.id);
   };
+  const demoSuffix = backupRequest.simulated ? " in this demo" : "";
   const backupMessage = backupRequest.state === "requested"
-    ? `Waiting for a simulated response${backupHelper ? ` from ${backupHelper.name}` : ""}.`
+    ? `Waiting for ${backupRequest.simulated ? "a simulated response" : "an answer"}${backupHelper ? ` from ${backupHelper.name}` : ""}.`
     : backupRequest.state === "accepted"
-      ? `${backupHelper?.name ?? "A trusted helper"} accepted in this demo.`
+      ? `${backupHelper?.name ?? "A trusted helper"} accepted${demoSuffix}.`
       : backupRequest.state === "declined"
-        ? `${backupHelper?.name ?? "The helper"} declined in this demo. You can request another helper from Plan.`
+        ? `${backupHelper?.name ?? "The helper"} declined${demoSuffix}. You can request another helper from Plan.`
         : `No family member was notified.`;
 
 
@@ -141,6 +144,8 @@ export function TodayDashboard() {
       activeTab="home"
       header={<TodayMap dots={dots} trail={isArrived} onDemo={() => setDemoOpen(true)} onExpand={() => setMapOpen(true)} onLocation={() => setLocationOpen(true)} />}
     >
+      <HelperAssignments />
+
       <Rise i={0} style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", rowGap: 8, columnGap: 12 }}>
         <View style={{ flexGrow: 1, flexShrink: 1, flexBasis: 140, minWidth: 0 }}>
           <T s={0.85} c="muted">{greeting}</T>
@@ -179,14 +184,16 @@ export function TodayDashboard() {
             <Btn
               kind="p"
               icon="userplus"
-              disabled={!canRequestBackup || trustedHelpers.every((helper) => helper.state !== "active")}
+              loading={backupBusy}
+              disabled={backupBusy || !canRequestBackup || trustedHelpers.every((helper) => helper.state !== "active")}
               onPress={requestBackup}
             >
               {backupRequest.state === "requested" ? "Waiting for response" : backupRequest.state === "accepted" ? "Backup accepted" : canRequestBackup ? "Ask a helper to collect" : "Response received"}
             </Btn>
           </View>
+          {backupError ? <View style={{ marginTop: 10 }}><Err text={backupError} /></View> : null}
           <View style={{ marginTop: 10 }}>
-            <T s={0.78} lh={1.35} c="muted" align="center">Simulated demo. Nobody is contacted.</T>
+            <T s={0.78} lh={1.35} c="muted" align="center">{backupRequest.simulated ? "Simulated demo. Nobody is contacted." : "Sent through SafeNest. Only the helper you ask can answer."}</T>
           </View>
         </Card>
       </Rise>
