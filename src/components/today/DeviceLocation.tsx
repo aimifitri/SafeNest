@@ -9,7 +9,7 @@ import { Icon } from "../navigation/Icon";
 import { useAppContext } from "../shared/AppContext";
 import { Btn, Input, Press, T } from "../shared/ui";
 import { DeviceLocationMap } from "./DeviceLocationMap";
-import type { DeviceLocationCoordinate, DeviceLocationPoint } from "./DeviceLocationMap.types";
+import type { DeviceLocationCoordinate, DeviceLocationPoint, RouteCoordinate } from "./DeviceLocationMap.types";
 import { TripSharing } from "./TripSharing";
 
 type SearchTarget = "start" | "destination";
@@ -47,36 +47,20 @@ const DEMO_PLACES: ReadonlyArray<{ name: string; coordinate: DeviceLocationCoord
   { name: "Bandar Baru Bangi, Selangor", coordinate: { latitude: 2.959, longitude: 101.752 } },
 ];
 
-type DemoRoute = {
+type PlannedRoute = {
   id: string;
-  duration: string;
-  distance: string;
-  road: string;
-  status: string;
-  toll: string;
+  coordinates: RouteCoordinate[];
+  cumulativeMeters: number[];
+  distanceMeters: number;
+  durationSeconds: number;
+  roadSummary: string;
 };
 
-const DEMO_ROUTES: Record<TravelMode, readonly DemoRoute[]> = {
-  driving: [
-    { id: "fastest", duration: "1 hr 41 min", distance: "141 km", road: "via Lebuhraya Utara-Selatan/E2", status: "Fastest · usual traffic", toll: "Toll roads may apply" },
-    { id: "alternative", duration: "1 hr 56 min", distance: "149 km", road: "via the alternate highway", status: "Alternative route", toll: "Toll roads may apply" },
-  ],
-  motorcycle: [
-    { id: "fastest", duration: "1 hr 41 min", distance: "141 km", road: "via Lebuhraya Utara-Selatan/E2", status: "Fastest · usual traffic", toll: "Toll roads may apply" },
-    { id: "alternative", duration: "1 hr 56 min", distance: "149 km", road: "via the alternate highway", status: "Alternative route", toll: "Toll roads may apply" },
-  ],
-  transit: [
-    { id: "fastest", duration: "2 hr 18 min", distance: "141 km", road: "via sample rail and bus connections", status: "Suggested transit option", toll: "Fares not available" },
-    { id: "alternative", duration: "2 hr 42 min", distance: "149 km", road: "via alternate sample connections", status: "Alternative transit option", toll: "Fares not available" },
-  ],
-  walking: [
-    { id: "fastest", duration: "28 hr 12 min", distance: "141 km", road: "via sample walking paths", status: "Suggested walking option", toll: "No toll estimate" },
-    { id: "alternative", duration: "29 hr 48 min", distance: "149 km", road: "via alternate sample paths", status: "Alternative walking option", toll: "No toll estimate" },
-  ],
-  cycling: [
-    { id: "fastest", duration: "9 hr 24 min", distance: "141 km", road: "via sample cycling paths", status: "Suggested cycling option", toll: "No toll estimate" },
-    { id: "alternative", duration: "9 hr 56 min", distance: "149 km", road: "via alternate sample paths", status: "Alternative cycling option", toll: "No toll estimate" },
-  ],
+type NavigationProgress = {
+  travelledCoordinates: RouteCoordinate[];
+  remainingMeters: number;
+  deviationMeters: number;
+  nearestIndex: number;
 };
 
 type CoordinateResult =
@@ -96,6 +80,125 @@ function parseCoordinates(latitudeText: string, longitudeText: string): Coordina
   return { kind: "valid", coordinate: { latitude, longitude } };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function distanceBetween(first: DeviceLocationCoordinate, second: DeviceLocationCoordinate): number {
+  const radians = (degrees: number) => degrees * Math.PI / 180;
+  const latitudeDelta = radians(second.latitude - first.latitude);
+  const longitudeDelta = radians(second.longitude - first.longitude);
+  const a = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(radians(first.latitude)) * Math.cos(radians(second.latitude)) * Math.sin(longitudeDelta / 2) ** 2;
+  return 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function parseOsrmResponse(payload: unknown): PlannedRoute[] {
+  if (!isRecord(payload) || typeof payload.code !== "string") {
+    throw new Error("The routing service returned an invalid response.");
+  }
+  if (payload.code !== "Ok") {
+    throw new Error(typeof payload.message === "string" ? payload.message : "No driving route was found.");
+  }
+  if (!Array.isArray(payload.routes)) throw new Error("The routing service returned no routes.");
+
+  const routes: PlannedRoute[] = payload.routes.map((rawRoute, routeIndex) => {
+    if (!isRecord(rawRoute) || !isRecord(rawRoute.geometry)) {
+      throw new Error("The routing service returned an incomplete route.");
+    }
+    const distance = rawRoute.distance;
+    const duration = rawRoute.duration;
+    const rawPairs = rawRoute.geometry.coordinates;
+    if (typeof distance !== "number" || !Number.isFinite(distance) || typeof duration !== "number" || !Number.isFinite(duration) || !Array.isArray(rawPairs)) {
+      throw new Error("The routing service returned invalid route details.");
+    }
+
+    const coordinates: RouteCoordinate[] = rawPairs.map((pair): RouteCoordinate => {
+      if (!Array.isArray(pair) || typeof pair[0] !== "number" || typeof pair[1] !== "number") {
+        throw new Error("The routing service returned invalid route coordinates.");
+      }
+      const [longitude, latitude] = pair;
+      if (!Number.isFinite(longitude) || !Number.isFinite(latitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+        throw new Error("The routing service returned out-of-range route coordinates.");
+      }
+      return { latitude, longitude };
+    });
+    if (coordinates.length < 2) throw new Error("The routing service returned an incomplete route path.");
+
+    const cumulativeMeters = [0];
+    for (let index = 1; index < coordinates.length; index += 1) {
+      const previous = coordinates[index - 1];
+      const current = coordinates[index];
+      if (previous && current) {
+        cumulativeMeters.push((cumulativeMeters[index - 1] ?? 0) + distanceBetween(previous, current));
+      }
+    }
+
+    const roadNames: string[] = [];
+    if (Array.isArray(rawRoute.legs)) {
+      for (const leg of rawRoute.legs) {
+        if (!isRecord(leg) || !Array.isArray(leg.steps)) continue;
+        for (const step of leg.steps) {
+          if (isRecord(step) && typeof step.name === "string" && step.name.trim()) roadNames.push(step.name.trim());
+        }
+      }
+    }
+    const summary = [...new Set(roadNames)].slice(0, 3);
+    return {
+      id: `osrm-${routeIndex}`,
+      coordinates,
+      cumulativeMeters,
+      distanceMeters: distance,
+      durationSeconds: duration,
+      roadSummary: summary.length > 0 ? `via ${summary.join(" · ")}` : "Suggested driving route",
+    };
+  });
+
+  if (routes.length === 0) throw new Error("No route was found for these locations.");
+  return routes;
+}
+
+function getNavigationProgress(route: PlannedRoute, coordinate: DeviceLocationCoordinate, lastIndex: number) {
+  let nearestIndex = Math.min(lastIndex, route.coordinates.length - 1);
+  let deviationMeters = Number.POSITIVE_INFINITY;
+  for (let index = Math.max(0, lastIndex - 3); index < route.coordinates.length; index += 1) {
+    const routeCoordinate = route.coordinates[index];
+    if (!routeCoordinate) continue;
+    const distance = distanceBetween(coordinate, routeCoordinate);
+    if (distance < deviationMeters) {
+      deviationMeters = distance;
+      nearestIndex = index;
+    }
+  }
+
+  const nearestCoordinate = route.coordinates[nearestIndex];
+  const totalPathMeters = route.cumulativeMeters[route.cumulativeMeters.length - 1] ?? 0;
+  const routeMetersCovered = route.cumulativeMeters[nearestIndex] ?? 0;
+  const remainingMeters = Math.max(0, totalPathMeters - routeMetersCovered)
+    + (nearestCoordinate ? distanceBetween(coordinate, nearestCoordinate) : 0);
+  return {
+    travelledCoordinates: route.coordinates.slice(0, nearestIndex + 1),
+    remainingMeters,
+    deviationMeters,
+    nearestIndex,
+  };
+}
+
+function formatDistance(meters: number): string {
+  return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.max(0, Math.round(meters))} m`;
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds <= 0) return "Arrived";
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  const hours = Math.floor(minutes / 60);
+  return hours > 0 ? `${hours} hr ${minutes % 60} min` : `${minutes} min`;
+}
+
+function formatEta(seconds: number): string {
+  return new Date(Date.now() + seconds * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 function formatSpeed(speed: number | null): string {
   return speed === null || speed < 0 ? "Unavailable" : `${Math.round(speed * 3.6)} km/h`;
 }
@@ -113,6 +216,12 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   const insets = useSafeAreaInsets();
   const subscription = useRef<LocationSubscription | null>(null);
   const trackingRequestId = useRef(0);
+  const routingRequestId = useRef(0);
+  const routingController = useRef<AbortController | null>(null);
+  const routeOptionsRef = useRef<PlannedRoute[]>([]);
+  const selectedRouteIdRef = useRef<string | null>(null);
+  const navigationActiveRef = useRef(false);
+  const progressIndexRef = useRef(0);
   const callbacks = useRef({ onLocationUpdate, onLocationError });
   callbacks.current = { onLocationUpdate, onLocationError };
   const [location, setLocation] = useState<LocationObject | null>(null);
@@ -131,12 +240,28 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   const [busy, setBusy] = useState(false);
   const [permissionBlocked, setPermissionBlocked] = useState(false);
   const [error, setError] = useState("");
+  const [routeOptions, setRouteOptions] = useState<PlannedRoute[]>([]);
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState("");
+  const [navigationActive, setNavigationActive] = useState(false);
+  const [navigationProgress, setNavigationProgress] = useState<NavigationProgress | null>(null);
+
+  routeOptionsRef.current = routeOptions;
+  selectedRouteIdRef.current = selectedRouteId;
 
   useEffect(() => {
     if (visible) return;
     trackingRequestId.current += 1;
+    routingRequestId.current += 1;
+    routingController.current?.abort();
+    routingController.current = null;
     subscription.current?.remove();
     subscription.current = null;
+    routeOptionsRef.current = [];
+    selectedRouteIdRef.current = null;
+    navigationActiveRef.current = false;
+    progressIndexRef.current = 0;
     setLocation(null);
     setCurrentLatitude("");
     setCurrentLongitude("");
@@ -153,16 +278,24 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     setBusy(false);
     setPermissionBlocked(false);
     setError("");
+    setRouteOptions([]);
+    setSelectedRouteId(null);
+    setRouteLoading(false);
+    setRouteError("");
+    setNavigationActive(false);
+    setNavigationProgress(null);
   }, [visible]);
 
   useEffect(() => () => {
     trackingRequestId.current += 1;
+    routingRequestId.current += 1;
+    routingController.current?.abort();
     subscription.current?.remove();
   }, []);
 
   useEffect(() => {
     const listener = AppState.addEventListener("change", (state) => {
-      if (state !== "active") stopTracking();
+      if (state !== "active") stopNavigation();
     });
     return () => listener.remove();
   }, []);
@@ -173,6 +306,29 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     subscription.current = null;
     setTracking(false);
     setBusy(false);
+  };
+
+  const stopNavigation = () => {
+    navigationActiveRef.current = false;
+    setNavigationActive(false);
+    stopTracking();
+  };
+
+  const clearRoutePlan = () => {
+    routingRequestId.current += 1;
+    routingController.current?.abort();
+    routingController.current = null;
+    routeOptionsRef.current = [];
+    selectedRouteIdRef.current = null;
+    navigationActiveRef.current = false;
+    progressIndexRef.current = 0;
+    setRouteOptions([]);
+    setSelectedRouteId(null);
+    setRouteLoading(false);
+    setRouteError("");
+    setNavigationActive(false);
+    setNavigationProgress(null);
+    setPreviewRoute(null);
   };
 
   const reportLocationError = (message: string, reason?: string) => {
@@ -188,6 +344,19 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     setCurrentLongitude(longitude.toFixed(6));
     setStartText(`${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
     setActiveSearch(null);
+    const selectedRoute = routeOptionsRef.current.find((route) => route.id === selectedRouteIdRef.current);
+    if (navigationActiveRef.current && selectedRoute) {
+      const progress = getNavigationProgress(selectedRoute, { latitude, longitude }, progressIndexRef.current);
+      progressIndexRef.current = progress.nearestIndex;
+      setNavigationProgress(progress);
+      if (progress.remainingMeters <= 35) {
+        navigationActiveRef.current = false;
+        setNavigationActive(false);
+        subscription.current?.remove();
+        subscription.current = null;
+        setTracking(false);
+      }
+    }
     callbacks.current.onLocationUpdate?.({
       latitude,
       longitude,
@@ -199,6 +368,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   };
 
   const editCurrentCoordinate = (setter: (value: string) => void, value: string) => {
+    clearRoutePlan();
     stopTracking();
     setLocation(null);
     setStartText("Pinned starting point");
@@ -206,7 +376,69 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     setPreviewRoute(null);
   };
 
-  const startTracking = async () => {
+  const calculateRoutes = async (
+    origin: DeviceLocationCoordinate,
+    destination: DeviceLocationCoordinate,
+    preferredRouteId?: string | null,
+  ): Promise<boolean> => {
+    if (travelMode !== "driving") {
+      setRouteOptions([]);
+      setSelectedRouteId(null);
+      setPreviewRoute(null);
+      setRouteError("The public OSRM routing profile supports driving routes only. Select Driving to calculate a route.");
+      return false;
+    }
+    const requestId = routingRequestId.current + 1;
+    routingRequestId.current = requestId;
+    routingController.current?.abort();
+    const controller = new AbortController();
+    routingController.current = controller;
+    setRouteLoading(true);
+    setRouteError("");
+    routeOptionsRef.current = [];
+    selectedRouteIdRef.current = null;
+    setRouteOptions([]);
+    setSelectedRouteId(null);
+    setPreviewRoute(null);
+    navigationActiveRef.current = false;
+    setNavigationActive(false);
+    setNavigationProgress(null);
+    try {
+      const url = `https://router.project-osrm.org/route/v1/driving/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?alternatives=true&steps=true&overview=full&geometries=geojson`;
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) throw new Error(`Routing service responded with status ${response.status}.`);
+      const payload: unknown = await response.json();
+      const routes = parseOsrmResponse(payload);
+      if (requestId !== routingRequestId.current) return false;
+      const selectedRoute = routes.find((route) => route.id === preferredRouteId) ?? routes[0] ?? null;
+      routeOptionsRef.current = routes;
+      selectedRouteIdRef.current = selectedRoute?.id ?? null;
+      progressIndexRef.current = 0;
+      setRouteOptions(routes);
+      setSelectedRouteId(selectedRoute?.id ?? null);
+      setPreviewRoute(selectedRoute?.id ?? null);
+      return selectedRoute !== null;
+    } catch (cause) {
+      if (requestId !== routingRequestId.current || controller.signal.aborted) return false;
+      const message = cause instanceof Error ? cause.message : "Unknown routing error.";
+      setRouteError(`Unable to calculate a route. ${message}`);
+      return false;
+    } finally {
+      if (requestId === routingRequestId.current) {
+        routingController.current = null;
+        setRouteLoading(false);
+      }
+    }
+  };
+
+  const startTracking = async (
+    navigateAfterFix = false,
+    plannedDestination?: DeviceLocationCoordinate,
+    preferredRouteId?: string | null,
+  ) => {
     if (busy || tracking) return;
     const requestId = trackingRequestId.current + 1;
     trackingRequestId.current = requestId;
@@ -236,6 +468,16 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
       const initial = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       if (!isCurrentRequest()) return;
       updateLocation(initial);
+      if (navigateAfterFix && plannedDestination) {
+        const routeReady = await calculateRoutes(
+          { latitude: initial.coords.latitude, longitude: initial.coords.longitude },
+          plannedDestination,
+          preferredRouteId,
+        );
+        if (!isCurrentRequest() || !routeReady) return;
+        navigationActiveRef.current = true;
+        setNavigationActive(true);
+      }
       const nextSubscription = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.Balanced,
@@ -248,6 +490,8 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
         (reason) => {
           if (!isCurrentRequest()) return;
           reportLocationError("Live GPS updates stopped because the location signal failed.", reason);
+          navigationActiveRef.current = false;
+          setNavigationActive(false);
           stopTracking();
         },
       );
@@ -279,6 +523,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     : null;
   const destinationPoint = destinationCoordinates.kind === "valid" ? destinationCoordinates.coordinate : null;
   const selectDestination = (coordinate: DeviceLocationCoordinate) => {
+    clearRoutePlan();
     setDestinationLatitude(coordinate.latitude.toFixed(6));
     setDestinationLongitude(coordinate.longitude.toFixed(6));
     setDestinationText("Map pin");
@@ -286,6 +531,40 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     setPreviewRoute(null);
   };
   const routeReady = currentPoint !== null && destinationPoint !== null;
+  const displayedRoute = routeOptions.find((route) => route.id === previewRoute) ?? null;
+
+  const startNavigation = async () => {
+    if (!routeReady || !destinationPoint || routeLoading || busy) return;
+    setRouteError("");
+    if (travelMode !== "driving") {
+      setRouteError("The public OSRM routing profile supports driving routes only. Select Driving to navigate.");
+      return;
+    }
+    if (tracking && location) {
+      const preferredRouteId = selectedRouteId;
+      const routeCalculated = await calculateRoutes(
+        { latitude: location.coords.latitude, longitude: location.coords.longitude },
+        destinationPoint,
+        preferredRouteId,
+      );
+      if (!routeCalculated) return;
+      const route = routeOptionsRef.current.find((candidate) => candidate.id === selectedRouteIdRef.current);
+      if (!route) return;
+      selectedRouteIdRef.current = route.id;
+      setSelectedRouteId(route.id);
+      setPreviewRoute(route.id);
+      progressIndexRef.current = 0;
+      const progress = getNavigationProgress(route, {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      }, 0);
+      setNavigationProgress(progress);
+      navigationActiveRef.current = true;
+      setNavigationActive(true);
+      return;
+    }
+    await startTracking(true, destinationPoint, selectedRouteId);
+  };
 
   const placesForSearch = (target: SearchTarget) => {
     const query = (target === "start" ? startText : destinationText).trim().toLowerCase();
@@ -295,6 +574,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   };
 
   const choosePlace = (target: SearchTarget, place: (typeof DEMO_PLACES)[number]) => {
+    clearRoutePlan();
     const { latitude, longitude } = place.coordinate;
     if (target === "start") {
       stopTracking();
@@ -312,6 +592,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   };
 
   const editPlaceText = (target: SearchTarget, value: string) => {
+    clearRoutePlan();
     setActiveSearch(target);
     setPreviewRoute(null);
     if (target === "start") {
@@ -328,6 +609,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   };
 
   const swapLocations = () => {
+    clearRoutePlan();
     stopTracking();
     setLocation(null);
     setStartText(destinationText);
@@ -372,7 +654,11 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
             return (
               <Press
                 key={mode.id}
-                onPress={() => { setTravelMode(mode.id); setPreviewRoute(null); }}
+                onPress={() => {
+                  clearRoutePlan();
+                  setTravelMode(mode.id);
+                  setPreviewRoute(null);
+                }}
                 label={`${mode.label} travel mode`}
                 state={{ selected }}
                 style={{
@@ -395,7 +681,10 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
               point={currentPoint}
               destination={destinationPoint}
               destinationTitle={destinationText || "Destination"}
-              showPreview={previewRoute !== null}
+              showPreview={displayedRoute !== null || previewRoute !== null}
+              routeCoordinates={displayedRoute?.coordinates}
+              travelledCoordinates={navigationProgress?.travelledCoordinates}
+              navigationActive={navigationActive}
               onSelectDestination={selectDestination}
             />
           ) : (
@@ -491,10 +780,10 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
               </View>
               <View style={{ flexDirection: "row", gap: 8 }}>
                 <View style={{ flex: 1 }}>
-                  <Input accessibilityLabel="Destination latitude" value={destinationLatitude} onChangeText={(value) => { setDestinationLatitude(value); setDestinationText("Pinned destination"); setPreviewRoute(null); }} placeholder="End latitude" keyboardType="numbers-and-punctuation" maxLength={16} />
+                  <Input accessibilityLabel="Destination latitude" value={destinationLatitude} onChangeText={(value) => { clearRoutePlan(); setDestinationLatitude(value); setDestinationText("Pinned destination"); setPreviewRoute(null); }} placeholder="End latitude" keyboardType="numbers-and-punctuation" maxLength={16} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Input accessibilityLabel="Destination longitude" value={destinationLongitude} onChangeText={(value) => { setDestinationLongitude(value); setDestinationText("Pinned destination"); setPreviewRoute(null); }} placeholder="End longitude" keyboardType="numbers-and-punctuation" maxLength={16} />
+                  <Input accessibilityLabel="Destination longitude" value={destinationLongitude} onChangeText={(value) => { clearRoutePlan(); setDestinationLongitude(value); setDestinationText("Pinned destination"); setPreviewRoute(null); }} placeholder="End longitude" keyboardType="numbers-and-punctuation" maxLength={16} />
                 </View>
               </View>
               {currentCoordinates.kind === "invalid" ? <T s={0.82} c={colors.danger}>Enter a valid starting latitude and longitude.</T> : null}
@@ -543,13 +832,37 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
               <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                 <T s={1.05} w={800}>Route options</T>
                 <View style={{ backgroundColor: colors.warning, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999 }}>
-                  <T s={0.66} w={700} c={colors.warningInk}>DEMO</T>
+                  <T s={0.66} w={700} c={colors.warningInk}>OSRM</T>
                 </View>
               </View>
-              <T s={0.78} c="muted" lh={1.35}>Illustrative sample estimates only. Live traffic, road routing and place search are not connected.</T>
-              {DEMO_ROUTES[travelMode].map((route) => {
-                const selected = previewRoute === route.id;
+              <T s={0.78} c="muted" lh={1.35}>
+                Routes use the public OSRM driving service and OpenStreetMap data. Live traffic and toll data are not provided.
+              </T>
+              <Btn
+                kind="p"
+                icon="drive"
+                onPress={() => {
+                  if (currentPoint && destinationPoint) void calculateRoutes(currentPoint, destinationPoint);
+                }}
+                disabled={routeLoading || busy || navigationActive}
+                loading={routeLoading}
+              >
+                {routeLoading ? "Calculating route..." : "Find driving routes"}
+              </Btn>
+              {travelMode !== "driving" ? (
+                <T s={0.82} c={colors.warningInk}>The selected public OSRM service supports driving routes only. Select Driving to calculate.</T>
+              ) : null}
+              {routeError ? <T s={0.84} c={colors.danger}>{routeError}</T> : null}
+
+              {routeOptions.map((route) => {
+                const selected = selectedRouteId === route.id;
                 const expanded = expandedRoute === route.id;
+                const remainingRatio = route.distanceMeters > 0 && navigationProgress && selected
+                  ? Math.min(1, navigationProgress.remainingMeters / route.distanceMeters)
+                  : 1;
+                const remainingSeconds = navigationProgress && selected && navigationProgress.remainingMeters <= 35
+                  ? 0
+                  : route.durationSeconds * remainingRatio;
                 return (
                   <View
                     key={route.id}
@@ -561,22 +874,33 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
                     }}
                   >
                     <Press
-                      onPress={() => setPreviewRoute(route.id)}
-                      label={`Select ${route.status} route preview`}
+                      onPress={() => {
+                        if (navigationActive) return;
+                        selectedRouteIdRef.current = route.id;
+                        setSelectedRouteId(route.id);
+                        setPreviewRoute(route.id);
+                        setNavigationProgress(null);
+                        progressIndexRef.current = 0;
+                      }}
+                      disabled={navigationActive}
+                      label={`Select route option ${route.roadSummary}`}
                       style={{ gap: 4 }}
                     >
                       <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-                        <T s={1.15} w={800}>{route.duration}</T>
-                        <T s={0.88} w={700} c="muted">{route.distance}</T>
+                        <T s={1.15} w={800}>{formatDuration(remainingSeconds)}</T>
+                        <T s={0.88} w={700} c="muted">{formatDistance(navigationProgress && selected ? navigationProgress.remainingMeters : route.distanceMeters)}</T>
                       </View>
-                      <T s={0.82} w={700}>{route.road}</T>
-                      <T s={0.78} c="muted">{route.status} · {route.toll}</T>
+                      <T s={0.82} w={700}>{route.roadSummary}</T>
+                      <T s={0.78} c="muted">
+                        {navigationProgress && selected && navigationProgress.remainingMeters <= 35
+                          ? "Arrived"
+                          : `ETA ${formatEta(navigationProgress && selected ? remainingSeconds : route.durationSeconds)}`}
+                        {" · Toll and live traffic info unavailable"}
+                      </T>
                     </Press>
                     {expanded ? (
                       <T s={0.78} c="muted" lh={1.4}>
-                        {travelMode === "driving" || travelMode === "motorcycle"
-                          ? "This example route mentions a toll-road corridor for demonstration. Confirm the real route and tolls with a navigation service."
-                          : "Travel time, transit availability and pathways are not connected to a live routing service."}
+                        Route distance and estimated duration are from OSRM. Turn-by-turn guidance, traffic, and toll pricing are not included.
                       </T>
                     ) : null}
                     <View style={{ flexDirection: "row", gap: 8 }}>
@@ -593,23 +917,55 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
                         kind={selected ? "s" : "o"}
                         sm
                         flex
-                        onPress={() => setPreviewRoute(route.id)}
-                        label="Preview illustrative route on map"
+                        disabled={navigationActive}
+                        onPress={() => {
+                          selectedRouteIdRef.current = route.id;
+                          setSelectedRouteId(route.id);
+                          setPreviewRoute(route.id);
+                          setNavigationProgress(null);
+                          progressIndexRef.current = 0;
+                        }}
+                        label="Preview route on map"
                       >
                         {selected ? "Previewing" : "Preview"}
                       </Btn>
                     </View>
+                    {selected && !navigationActive ? (
+                      <Btn kind="p" icon="drive" onPress={() => void startNavigation()} disabled={routeLoading || busy} loading={busy}>
+                        {busy ? "Starting GPS..." : "Go"}
+                      </Btn>
+                    ) : null}
                   </View>
                 );
               })}
+              {navigationProgress ? (
+                <View style={{ gap: 5, padding: 12, borderRadius: 14, backgroundColor: colors.primarySoft }}>
+                  <T s={0.9} w={700} c={colors.primaryInk}>
+                    {navigationProgress.remainingMeters <= 35
+                      ? "Arrived at destination"
+                      : navigationActive
+                        ? `On route · ${formatDistance(navigationProgress.remainingMeters)} remaining`
+                        : "Navigation stopped"}
+                  </T>
+                  {navigationActive && navigationProgress.deviationMeters > 100 ? (
+                    <T s={0.78} c={colors.warningInk}>You appear away from the planned route. Stop and recalculate from your current location.</T>
+                  ) : null}
+                </View>
+              ) : null}
+              {navigationActive ? (
+                <Btn kind="o" icon="cantx" color={colors.danger} onPress={stopNavigation} label="Stop navigation and GPS tracking">
+                  Stop navigation
+                </Btn>
+              ) : null}
+              <T s={0.72} c="muted">Routing by OSRM · Map data © OpenStreetMap contributors</T>
             </View>
           ) : (
-            <T s={0.82} c="muted">Choose known demo places, use GPS, or tap the native map to set both route points.</T>
+            <T s={0.82} c="muted">Choose a start and destination before requesting a driving route.</T>
           )}
 
-          {tracking ? <Btn kind="o" icon="cantx" color={colors.danger} onPress={stopTracking} label="Stop live location updates">Stop GPS</Btn> : null}
+          {tracking && !navigationActive ? <Btn kind="o" icon="cantx" color={colors.danger} onPress={stopTracking} label="Stop live location updates">Stop GPS</Btn> : null}
           <T s={0.76} c="muted" align="center" lh={1.35}>
-            GPS updates are live only while this screen is open. Search suggestions and route cards are demo data. {Platform.OS === "web" ? "Interactive map selection is available in the native app." : "Tap the map to set a destination; the line preview is not road directions."}
+            GPS updates run only while this screen is open. Route matching and arrival estimates are approximate; this screen does not provide turn-by-turn voice guidance. {Platform.OS === "web" ? "Interactive map selection is available in the native app." : "Tap the map to set a destination."}
           </T>
           <TripSharing
             visible={visible}
