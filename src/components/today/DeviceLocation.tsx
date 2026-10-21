@@ -15,6 +15,22 @@ import { TripSharing } from "./TripSharing";
 type SearchTarget = "start" | "destination";
 type TravelMode = "driving" | "motorcycle" | "transit" | "walking" | "cycling";
 
+export type LiveLocationUpdate = {
+  latitude: number;
+  longitude: number;
+  accuracy: number | null;
+  speed: number | null;
+  heading: number | null;
+  timestamp: number;
+};
+
+type DeviceLocationModalProps = {
+  visible: boolean;
+  onClose: () => void;
+  onLocationUpdate?: (update: LiveLocationUpdate) => void;
+  onLocationError?: (error: Error) => void;
+};
+
 const TRAVEL_MODES: ReadonlyArray<{ id: TravelMode; label: string; icon: "car" | "motorbike" | "bus" | "walk" | "bicycle" }> = [
   { id: "driving", label: "Driving", icon: "car" },
   { id: "motorcycle", label: "Motorcycle", icon: "motorbike" },
@@ -80,11 +96,25 @@ function parseCoordinates(latitudeText: string, longitudeText: string): Coordina
   return { kind: "valid", coordinate: { latitude, longitude } };
 }
 
-export function DeviceLocationModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+function formatSpeed(speed: number | null): string {
+  return speed === null || speed < 0 ? "Unavailable" : `${Math.round(speed * 3.6)} km/h`;
+}
+
+function formatHeading(heading: number | null): string {
+  if (heading === null || heading < 0) return "Unavailable";
+  const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"] as const;
+  const normalized = ((heading % 360) + 360) % 360;
+  return `${Math.round(normalized)}° ${directions[Math.round(normalized / 45) % directions.length]}`;
+}
+
+export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLocationError }: DeviceLocationModalProps) {
   const { theme } = useAppContext();
   const colors = theme.colors;
   const insets = useSafeAreaInsets();
   const subscription = useRef<LocationSubscription | null>(null);
+  const trackingRequestId = useRef(0);
+  const callbacks = useRef({ onLocationUpdate, onLocationError });
+  callbacks.current = { onLocationUpdate, onLocationError };
   const [location, setLocation] = useState<LocationObject | null>(null);
   const [currentLatitude, setCurrentLatitude] = useState("");
   const [currentLongitude, setCurrentLongitude] = useState("");
@@ -104,6 +134,7 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
 
   useEffect(() => {
     if (visible) return;
+    trackingRequestId.current += 1;
     subscription.current?.remove();
     subscription.current = null;
     setLocation(null);
@@ -124,7 +155,10 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
     setError("");
   }, [visible]);
 
-  useEffect(() => () => subscription.current?.remove(), []);
+  useEffect(() => () => {
+    trackingRequestId.current += 1;
+    subscription.current?.remove();
+  }, []);
 
   useEffect(() => {
     const listener = AppState.addEventListener("change", (state) => {
@@ -134,9 +168,16 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
   }, []);
 
   const stopTracking = () => {
+    trackingRequestId.current += 1;
     subscription.current?.remove();
     subscription.current = null;
     setTracking(false);
+    setBusy(false);
+  };
+
+  const reportLocationError = (message: string, reason?: string) => {
+    setError(message);
+    callbacks.current.onLocationError?.(new Error(reason ? `${message} ${reason}` : message));
   };
 
   const updateLocation = (next: LocationObject) => {
@@ -147,6 +188,14 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
     setCurrentLongitude(longitude.toFixed(6));
     setStartText(`${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
     setActiveSearch(null);
+    callbacks.current.onLocationUpdate?.({
+      latitude,
+      longitude,
+      accuracy: next.coords.accuracy,
+      speed: next.coords.speed,
+      heading: next.coords.heading,
+      timestamp: next.timestamp,
+    });
   };
 
   const editCurrentCoordinate = (setter: (value: string) => void, value: string) => {
@@ -159,39 +208,62 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
 
   const startTracking = async () => {
     if (busy || tracking) return;
+    const requestId = trackingRequestId.current + 1;
+    trackingRequestId.current = requestId;
+    const isCurrentRequest = () => requestId === trackingRequestId.current && visible;
     setBusy(true);
     setError("");
     setPermissionBlocked(false);
     try {
       let permission = await Location.getForegroundPermissionsAsync();
+      if (!isCurrentRequest()) return;
       if (permission.status !== "granted") {
         permission = await Location.requestForegroundPermissionsAsync();
       }
+      if (!isCurrentRequest()) return;
       if (permission.status !== "granted") {
         setPermissionBlocked(!permission.canAskAgain);
-        setError("Location permission is needed to show this phone on the map.");
+        reportLocationError("Location permission is needed to show this phone on the map.");
         return;
       }
-      if (!(await Location.hasServicesEnabledAsync())) {
-        setError("Turn on location services on this phone, then try again.");
+      const servicesEnabled = await Location.hasServicesEnabledAsync();
+      if (!isCurrentRequest()) return;
+      if (!servicesEnabled) {
+        reportLocationError("Turn on location services on this phone, then try again.");
         return;
       }
 
       const initial = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      if (!isCurrentRequest()) return;
       updateLocation(initial);
-      subscription.current = await Location.watchPositionAsync(
+      const nextSubscription = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.Balanced,
           distanceInterval: 10,
           timeInterval: 5000,
         },
-        updateLocation,
+        (next) => {
+          if (isCurrentRequest()) updateLocation(next);
+        },
+        (reason) => {
+          if (!isCurrentRequest()) return;
+          reportLocationError("Live GPS updates stopped because the location signal failed.", reason);
+          stopTracking();
+        },
       );
+      if (!isCurrentRequest()) {
+        nextSubscription.remove();
+        return;
+      }
+      subscription.current?.remove();
+      subscription.current = nextSubscription;
       setTracking(true);
-    } catch {
-      setError("Unable to get this phone's location. Check GPS availability and try again.");
+    } catch (cause) {
+      if (!isCurrentRequest()) return;
+      const reason = cause instanceof Error ? cause.message : "Unknown location error";
+      reportLocationError("Unable to get this phone's location. Check GPS availability and try again.", reason);
     } finally {
-      setBusy(false);
+      if (isCurrentRequest()) setBusy(false);
     }
   };
 
@@ -431,18 +503,30 @@ export function DeviceLocationModal({ visible, onClose }: { visible: boolean; on
           ) : null}
 
           {location ? (
-            <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 12 }}>
-              <View style={{ flex: 1 }}>
-                <T s={0.72} c="muted">ACCURACY</T>
-                <T s={0.9} w={700}>{location.coords.accuracy === null ? "Unknown" : `About ${Math.round(location.coords.accuracy)} m`}</T>
+            <View style={{ gap: 10 }}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <T s={0.72} c="muted">ACCURACY</T>
+                  <T s={0.9} w={700}>{location.coords.accuracy === null ? "Unknown" : `About ${Math.round(location.coords.accuracy)} m`}</T>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <T s={0.72} c="muted">UPDATED</T>
+                  <T s={0.9} w={700}>{new Date(location.timestamp).toLocaleTimeString()}</T>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <T s={0.72} c="muted">STATUS</T>
+                  <T s={0.9} w={700} c={tracking ? colors.success : colors.muted}>{tracking ? "Live" : "Stopped"}</T>
+                </View>
               </View>
-              <View style={{ flex: 1 }}>
-                <T s={0.72} c="muted">UPDATED</T>
-                <T s={0.9} w={700}>{new Date(location.timestamp).toLocaleTimeString()}</T>
-              </View>
-              <View style={{ flex: 1 }}>
-                <T s={0.72} c="muted">STATUS</T>
-                <T s={0.9} w={700} c={tracking ? colors.success : colors.muted}>{tracking ? "Live" : "Stopped"}</T>
+              <View style={{ flexDirection: "row", gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <T s={0.72} c="muted">SPEED</T>
+                  <T s={0.9} w={700}>{formatSpeed(location.coords.speed)}</T>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <T s={0.72} c="muted">HEADING</T>
+                  <T s={0.9} w={700}>{formatHeading(location.coords.heading)}</T>
+                </View>
               </View>
             </View>
           ) : null}
