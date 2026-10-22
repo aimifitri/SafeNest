@@ -54,7 +54,8 @@ export interface PickupStatus {
   collectorId: PersonId;
   currentPlace: "school" | "road" | "office";
   etaMinutes: number;
-  simulated: true;
+  // false when the status comes from a real pickup journey instead of the demo.
+  simulated: boolean;
 }
 
 export interface BackupRequest {

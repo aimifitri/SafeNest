@@ -6,12 +6,21 @@ import { useAuth } from "../shared/AuthContext";
 import { Btn, Err, Rise, T } from "../shared/ui";
 import { StatusPill } from "../shared/StatusPill";
 import {
-  completeRequest,
   fetchAssignments,
   respondToRequest,
   subscribeToRequests,
 } from "../shared/backupApi";
 import type { BackupAssignment } from "../shared/backupApi";
+import {
+  cancelJourney,
+  confirmHandover,
+  fetchMyJourneys,
+  markArrived,
+  startJourney,
+  subscribeToJourneys,
+} from "../shared/pickupJourneyApi";
+import type { MyJourney } from "../shared/pickupJourneyApi";
+import { JourneySteps } from "./JourneySteps";
 
 // Shown on Today only when someone has asked THIS signed-in person to collect a child.
 // This is the helper's side of a real (non-simulated) backup request. Renders nothing otherwise.
@@ -19,34 +28,38 @@ export function HelperAssignments() {
   const { session } = useAuth();
   const userId = session?.user.id;
   const [items, setItems] = useState<BackupAssignment[]>([]);
+  const [journeys, setJourneys] = useState<MyJourney[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const res = await fetchAssignments();
+    const [res, mine] = await Promise.all([fetchAssignments(), fetchMyJourneys()]);
     // A failed background load just keeps what is shown. It is not an error for people who are not helpers.
     if (res.ok) setItems(res.data);
+    if (mine.ok) setJourneys(mine.data);
   }, []);
 
   useEffect(() => {
     if (!userId) return;
     void load();
-    const unsubscribe = subscribeToRequests(`helper-${userId}`, () => void load());
+    const unsubscribeRequests = subscribeToRequests(`helper-${userId}`, () => void load());
+    const unsubscribeJourneys = subscribeToJourneys(`helper-${userId}`, () => void load());
     const appState = AppState.addEventListener("change", (next) => {
       if (next === "active") void load();
     });
     return () => {
-      unsubscribe();
+      unsubscribeRequests();
+      unsubscribeJourneys();
       appState.remove();
     };
   }, [userId, load]);
 
-  const run = async (item: BackupAssignment, action: () => ReturnType<typeof respondToRequest>) => {
+  const run = async (item: BackupAssignment, action: () => Promise<{ ok: boolean; error?: string }>) => {
     if (busyId) return;
     setBusyId(item.request_id);
     setActionError(null);
     const res = await action();
-    if (!res.ok) setActionError(res.error);
+    if (!res.ok) setActionError(res.error ?? "Something went wrong. Please try again.");
     await load();
     setBusyId(null);
   };
@@ -57,6 +70,7 @@ export function HelperAssignments() {
     <View style={{ gap: 12 }}>
       {items.map((item) => {
         const busy = busyId === item.request_id;
+        const journey = journeys.find((j) => j.backup_request_id === item.request_id);
         return (
           <Rise key={item.request_id} kind="swap">
             <Card style={{ gap: 12 }}>
@@ -85,9 +99,16 @@ export function HelperAssignments() {
                   </Btn>
                 </View>
               ) : (
-                <Btn kind="p" loading={busy} disabled={busy} onPress={() => void run(item, () => completeRequest(item.request_id))}>
-                  I have collected {item.child_name}
-                </Btn>
+                <JourneySteps
+                  childName={item.child_name}
+                  step={journey ? journey.state : "none"}
+                  busy={busy}
+                  startLabel="Start journey"
+                  onStart={() => void run(item, () => startJourney(item.child_id))}
+                  onArrived={() => journey && void run(item, () => markArrived(journey.journey_id))}
+                  onHandover={() => journey && void run(item, () => confirmHandover(journey.journey_id))}
+                  onCancel={() => journey && void run(item, () => cancelJourney(journey.journey_id))}
+                />
               )}
             </Card>
           </Rise>
