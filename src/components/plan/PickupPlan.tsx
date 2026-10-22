@@ -7,7 +7,6 @@ import { AppShell } from "../shared/AppShell";
 import { useAppContext } from "../shared/AppContext";
 import { Avatar } from "../shared/Avatar";
 import { Card } from "../shared/Card";
-import { PrimaryButton } from "../shared/PrimaryButton";
 import { SectionHeading } from "../shared/SectionHeading";
 import { Disclosure } from "../shared/Disclosure";
 import { Sheet } from "../shared/Sheet";
@@ -15,20 +14,18 @@ import { TimeWheelPicker } from "../shared/TimeWheel";
 import { StatusPill } from "../shared/StatusPill";
 import { clock } from "../shared/circleEngine";
 import { sim } from "../shared/demoSim";
-import { setTeacherCheck, useTeacherCheck } from "../shared/teacherCheck";
 import { mockData } from "../shared/mockData";
 import { Banner, Btn, Dl, Err, Lead, Press, Rise, Row, Switch, T, Tag } from "../shared/ui";
 import { CircleRows } from "../today/CircleRows";
-import { TeacherPhotoSheet } from "../today/TeacherSheets";
 import { usePickupFlow } from "../today/usePickupFlow";
-import type { VerificationState, Weekday } from "../shared/types";
+import type { Weekday } from "../shared/types";
 
 const weekdays: { key: Weekday; label: string }[] = [
   { key: 1, label: "Monday" }, { key: 2, label: "Tuesday" }, { key: 3, label: "Wednesday" }, { key: 4, label: "Thursday" }, { key: 5, label: "Friday" },
 ];
 
 // Plan is for planning: school times, today's change and the planned arrangement. The live pickup (who answered, the
-// collector's journey, the teacher check, cancel and reset) lives on Today and shares the same state. The panels
+// collector's journey, the photo for the teacher, cancel and reset) lives on Today and shares the same state. The panels
 // below were moved out of Plan's visible interface on purpose. Their state, handlers and APIs are unchanged: set this
 // to true to bring them back.
 const SHOW_ACTIVE_PICKUP_PANELS = false;
@@ -37,10 +34,10 @@ const validTime = /^(?:1[0-2]|[1-9]):[0-5][0-9] (?:AM|PM)$/;
 
 export function PickupPlan() {
   const { theme, temporaryDismissal, setTemporaryDismissal, weeklySchedule, updateWeekdayTime } = useAppContext();
-  // One shared answer for Today and Plan: who is collecting, who was asked, what the teacher check says.
+  // One shared answer for Today and Plan: who is collecting and who was asked.
   const pf = usePickupFlow();
   const colors = theme.colors;
-  const { child, school, teacherPhotoVerification } = mockData;
+  const { child, school } = mockData;
   const weekdayNumber = new Date().getDay();
   const today: Weekday = (weekdayNumber === 0 ? 1 : Math.min(weekdayNumber, 5)) as Weekday;
   const todayLabel = weekdays.find((day) => day.key === today)?.label ?? "Today";
@@ -55,19 +52,14 @@ export function PickupPlan() {
   const editingDayLabel = weekdays.find((day) => day.key === editingWeekday)?.label;
   const pickerTime = editingWeekday !== null ? draftWeeklyTime : selectedDismissal;
   const [notice, setNotice] = useState("");
-  const [photoSheet, setPhotoSheet] = useState(false);
   const [optInSheet, setOptInSheet] = useState(false);
   const flow = pf.flow;
   const collector = pf.collector;
-  const collectorId = collector.name;
-  // The teacher check is shared with Today, so a pickup only counts as complete once it is settled.
-  const verificationState = useTeacherCheck(collectorId);
-  const setVerificationState = (state: VerificationState) => setTeacherCheck(collectorId, state);
   const esc = pf.escalation;
   const deadlineLabel = clock(pf.dismissMin - esc.minutesBefore);
   const askedNames = pf.people.filter((p) => p.approved && p.id !== pf.viewerId).map((p) => p.name);
-  const flowIsActive = ["asking", "nobody", "helper_assigned", "travelling", "at_school", "teacher_pending", "handover_pending", "teacher_rejected", "collected"].includes(flow.phase);
-  const canAsk = flow.phase !== "helper_assigned" && flow.phase !== "asking" && flow.phase !== "travelling" && flow.phase !== "at_school" && flow.phase !== "teacher_pending" && flow.phase !== "teacher_rejected" && flow.phase !== "collected";
+  const flowIsActive = ["asking", "nobody", "helper_assigned", "travelling", "at_school", "collected"].includes(flow.phase);
+  const canAsk = flow.phase !== "helper_assigned" && flow.phase !== "asking" && flow.phase !== "travelling" && flow.phase !== "at_school" && flow.phase !== "collected";
 
   const openDismissalSelector = () => {
     setSelectedDismissal(dismissal);
@@ -124,13 +116,6 @@ export function PickupPlan() {
     }
     const ok = await pf.escalationSettings.saveSettings(merged);
     if (ok) setNotice(merged.enabled ? "Automatic backup is on." : "Automatic backup is off.");
-  };
-
-  const simulateTeacher = (ok: boolean) => {
-    // In the demo, the answer also moves the pickup (OK completes it, no sends it back to the start).
-    if (pf.simActive && pf.demo.state.engine.stage === "arrived") sim.teacherSays(ok, pf.env);
-    else setVerificationState(ok ? "approved" : "rejected");
-    setNotice(ok ? "Teacher approval simulated. This is not an identity check." : "Teacher rejection simulated. This is not an identity check.");
   };
 
   const weeklyMode = editingWeekday !== null;
@@ -209,7 +194,7 @@ export function PickupPlan() {
             </Press>
           </Link>
         ) : null}
-        <T s={0.8} lh={1.4} c="muted">{pf.simActive ? "Simulated. " : ""}Requests, answers, the journey and the teacher check are shown on Today. Who can be asked is managed in Circle.</T>
+        <T s={0.8} lh={1.4} c="muted">{pf.simActive ? "Simulated. " : ""}Requests, answers and the journey are shown on Today. Who can be asked is managed in Circle.</T>
       </Card>
 
       {SHOW_ACTIVE_PICKUP_PANELS ? (
@@ -292,45 +277,6 @@ export function PickupPlan() {
         <T s={0.8} lh={1.4} c="muted">Only starts when SafeNest predicts you will be late and you have not answered. You can turn it off any time.</T>
       </Card>
 
-      {SHOW_ACTIVE_PICKUP_PANELS ? (
-        <>
-      <SectionHeading title="Teacher check" />
-      <Card style={{ gap: 12 }}>
-        <View style={{ gap: 10 }}>
-          <View>
-            <T s={1.05} w={700}>{school.teacher} confirms the collector</T>
-            <T c="muted" lh={1.4}>Before {child.name} leaves with {collector?.name ?? "the collector"}.</T>
-          </View>
-          <Rise key={verificationState} kind="swap">
-            <StatusPill label={verificationLabel(verificationState)} tone={verificationState === "approved" ? "success" : verificationState === "rejected" ? "danger" : "info"} />
-          </Rise>
-        </View>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 14, padding: 12, borderRadius: 18, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.line }}>
-          <Avatar name={collector?.name ?? "Collector"} size={48} />
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <T w={800}>{collector?.name ?? "Pickup collector"}</T>
-            <T s={0.84} c="muted" lh={1.35}>{teacherPhotoVerification.photoDescription}</T>
-          </View>
-        </View>
-        {verificationState === "notStarted" || verificationState === "rejected" ? (
-          <PrimaryButton label="Send photo to teacher" onPress={() => setPhotoSheet(true)} />
-        ) : verificationState === "awaitingTeacher" || verificationState === "photoPrepared" ? (
-          <View style={{ gap: 8 }}>
-            <T s={0.85} w={700} c="muted">Simulate the teacher's answer:</T>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-              <Btn kind="p" flex onPress={() => simulateTeacher(true)}>Simulate teacher OK</Btn>
-              <Btn kind="o" flex color={colors.danger} onPress={() => simulateTeacher(false)}>Simulate no</Btn>
-            </View>
-          </View>
-        ) : (
-          <Btn kind="s" onPress={() => { setVerificationState("notStarted"); setNotice("Demo teacher check reset."); }}>Reset demo verification</Btn>
-        )}
-        <T s={0.8} lh={1.4} c="muted">Simulated. No photo is taken and no identity is verified.</T>
-      </Card>
-
-        </>
-      ) : null}
-
       <Disclosure title="Child and school details" sub={`${child.name}, ${child.age} · Class ${child.className}`}>
         <Row first style={{ paddingTop: 0, paddingBottom: 6 }}>
           <Avatar name={child.name} size={44} />
@@ -348,20 +294,11 @@ export function PickupPlan() {
         <View style={{ gap: 14 }}>
           <Step number="1" title="Check today's plan" detail={`${collector?.name ?? "The collector"} collects at ${dismissal}.`} />
           <Step number="2" title="Backup if you cannot make it" detail={`Say so, or SafeNest asks your family and Trusted Circle together at ${deadlineLabel} if you are late and have not answered.`} />
-          <Step number="3" title="Teacher checks" detail={`${school.teacher} confirms the collector before ${child.name} leaves.`} />
-          <Step number="4" title="Child leaves" detail="After the teacher says OK. This is a demo." />
+          <Step number="3" title="Photo shown at school" detail={`${school.teacher} compares the photo with the person at the gate. If it does not match, ${child.name} stays and the teacher messages you directly.`} />
+          <Step number="4" title="Collector confirms" detail={`The collector taps that ${child.name} is picked up. This is a demo.`} />
         </View>
       </Disclosure>
 
-      <TeacherPhotoSheet
-        visible={photoSheet}
-        onClose={() => setPhotoSheet(false)}
-        onSent={pf.markMessageSent}
-        simulated={flow.simulated}
-        collector={collector.name}
-        collectorRole={pf.collectorRole}
-        dismiss={pf.dismissMin}
-      />
       <Sheet
         visible={optInSheet}
         onClose={() => setOptInSheet(false)}
@@ -437,8 +374,7 @@ function arrangementTitle(phase: string, collector: string, child: string): stri
   switch (phase) {
     case "asking": return "Asking your circle";
     case "nobody": return "Nobody available yet";
-    case "helper_assigned": case "travelling": case "at_school": case "teacher_pending": case "handover_pending": return `${collector} is collecting`;
-    case "teacher_rejected": return "Collector not approved";
+    case "helper_assigned": case "travelling": case "at_school": return `${collector} is collecting`;
     case "collected": return `${child} was collected by ${collector}`;
     default: return `${collector} collects`;
   }
@@ -449,18 +385,8 @@ function arrangementDetail(phase: string, collector: string, child: string, dism
     case "asking": return `A backup request is open. The first person to accept collects ${child}.`;
     case "nobody": return `Nobody could collect ${child} yet. Open Today to decide what happens next.`;
     case "helper_assigned": return `${collector} accepted, so you do not need to collect ${child} today.`;
-    case "travelling": case "at_school": case "teacher_pending": case "handover_pending": return `${collector} is handling today's pickup. ${child} is not collected until the handover is confirmed.`;
-    case "teacher_rejected": return `The teacher did not approve ${collector}. ${child} has not been handed over.`;
+    case "travelling": case "at_school": return `${collector} is handling today's pickup. ${child} is not collected until ${collector} confirms the pickup.`;
     case "collected": return `Today's pickup is complete.`;
     default: return `You plan to collect ${child} when school ends at ${dismissal}. If you cannot, SafeNest can ask ${asked} ${asked === 1 ? "person" : "people"} together.`;
   }
 }
-
-function verificationLabel(state: VerificationState): string {
-  if (state === "approved") return "Teacher OK · Demo";
-  if (state === "rejected") return "Teacher said no · Demo";
-  if (state === "awaitingTeacher") return "Awaiting teacher · Demo";
-  if (state === "photoPrepared") return "Photo prepared · Demo";
-  return "Not started · Demo";
-}
-

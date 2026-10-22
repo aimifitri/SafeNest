@@ -157,7 +157,7 @@ export function DemoSheet({ visible, onClose, pf }: { visible: boolean; onClose:
       </Group>
 
       <Group title="Cancel and reset">
-        <T s={0.84} c="muted" lh={1.4}>The travel, arrival and teacher buttons sit on the Today card at the step they belong to. Resetting lives here only.</T>
+        <T s={0.84} c="muted" lh={1.4}>The travel, arrival and picked-up buttons sit on the Today card at the step they belong to. Resetting lives here only.</T>
         {cancellable ? <Btn kind="o" onPress={() => { void pf.run("cancel_round"); }}>Cancel and start over</Btn> : null}
         <Btn kind="o" onPress={() => sim.reset(env)}>Restart demo</Btn>
       </Group>

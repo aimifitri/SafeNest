@@ -42,11 +42,12 @@ export const ESCALATION_DEFAULTS: EscalationSettings = { enabled: false, minutes
 export const ESCALATION_CUTOFF_AFTER = 30;
 
 /**
- * plan -> circle (asking) -> covered (accepted) -> travelling -> arrived (teacher checks) -> approved (teacher OK)
- * -> collected (handover confirmed). "rejected" = the teacher said no: the child is NOT collected.
+ * plan -> circle (asking) -> covered (accepted) -> travelling -> arrived (at school) -> collected.
+ * The teacher compares the photo with the person at the gate and tells the parent personally, outside the app.
+ * The app has no teacher yes or no. The collector says "I've picked up" once the child is with them.
  * There is no way from covered/travelling straight to collected.
  */
-export type Stage = "plan" | "committed" | "circle" | "covered" | "travelling" | "arrived" | "approved" | "rejected" | "collected";
+export type Stage = "plan" | "committed" | "circle" | "covered" | "travelling" | "arrived" | "collected";
 export type Reason = "" | "auto" | "manual" | "no" | "again";
 
 export type Engine = {
@@ -59,14 +60,12 @@ export type Engine = {
   photoSent: boolean;
   /** "I will come myself": when the parent says they will leave. */
   leaveAt: number | null;
-  /** People the teacher did not approve today. They are not asked again. */
-  rejected: readonly string[];
 };
 
-export const initialEngine: Engine = { stage: "plan", reason: "", replies: {}, collector: null, askedAt: null, photoSent: false, leaveAt: null, rejected: [] };
+export const initialEngine: Engine = { stage: "plan", reason: "", replies: {}, collector: null, askedAt: null, photoSent: false, leaveAt: null };
 
 /** Stages where somebody is already assigned and the pickup is under way (no new request may start). */
-const ASSIGNED: readonly Stage[] = ["covered", "travelling", "arrived", "approved", "collected"];
+const ASSIGNED: readonly Stage[] = ["covered", "travelling", "arrived", "collected"];
 
 // ---------- derived values ----------
 
@@ -122,7 +121,7 @@ export function fire(e: Engine, people: readonly CirclePerson[], viewerId: strin
   if (!force && e.stage !== "plan") return e;
   if (force && ASSIGNED.includes(e.stage)) return e;
   const replies: Record<string, Reply> = {};
-  for (const p of recipients(people, viewerId)) if (!e.rejected.includes(p.id)) replies[p.id] = "wait";
+  for (const p of recipients(people, viewerId)) replies[p.id] = "wait";
   return { ...e, stage: "circle", reason, replies, collector: null, askedAt: now, photoSent: false };
 }
 
@@ -159,15 +158,11 @@ export function nobodyAvailable(e: Engine): boolean {
 export const commit = (e: Engine, leaveAt: number | null = null): Engine => (ASSIGNED.includes(e.stage) ? e : { ...e, stage: "committed", leaveAt, collector: null, photoSent: false });
 /** The accepted collector sets off. Only after acceptance. */
 export const depart = (e: Engine): Engine => (e.stage === "covered" ? { ...e, stage: "travelling" } : e);
-/** The collector reaches the school: the teacher checks them. Only after acceptance. */
+/** The collector reaches the school. Only after acceptance. */
 export const arrive = (e: Engine): Engine => (e.stage === "covered" || e.stage === "travelling" ? { ...e, stage: "arrived" } : e);
 export const sendPhoto = (e: Engine): Engine => ({ ...e, photoSent: true });
-/** Teacher says OK. This is identity approval only: the child is not collected until the handover is confirmed. */
-export const teacherOk = (e: Engine): Engine => (e.stage === "arrived" ? { ...e, stage: "approved" } : e);
-/** The child is handed over after the teacher approved. This completes the pickup. */
-export const handover = (e: Engine): Engine => (e.stage === "approved" ? { ...e, stage: "collected" } : e);
-/** Teacher says no: nothing is collected. The collector is remembered as rejected and the parent decides what happens next. */
-export const teacherNo = (e: Engine): Engine => (e.stage === "arrived" && e.collector ? { ...e, stage: "rejected", photoSent: false, rejected: [...e.rejected, e.collector] } : e);
+/** The collector says the child is with them. Only from the school, so nothing is ever collected without arriving first. */
+export const handover = (e: Engine): Engine => (e.stage === "arrived" ? { ...e, stage: "collected" } : e);
 export const parentCollects = (e: Engine, viewerId: string): Engine => (e.stage === "collected" ? e : { ...e, stage: "collected", collector: viewerId });
 export const cancelRound = (e: Engine): Engine => (e.stage === "collected" || e.stage === "plan" || e.stage === "committed" ? e : { ...initialEngine });
 

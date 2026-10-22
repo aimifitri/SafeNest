@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, View } from "react-native";
 
 import { Card } from "../shared/Card";
@@ -30,6 +30,7 @@ export function HelperAssignments() {
   const [items, setItems] = useState<BackupAssignment[]>([]);
   const [journeys, setJourneys] = useState<MyJourney[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const busyRef = useRef(false); // state is async, so a fast double tap needs a ref to be refused
   const [actionError, setActionError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -55,13 +56,18 @@ export function HelperAssignments() {
   }, [userId, load]);
 
   const run = async (item: BackupAssignment, action: () => Promise<{ ok: boolean; error?: string }>) => {
-    if (busyId) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusyId(item.request_id);
     setActionError(null);
-    const res = await action();
-    if (!res.ok) setActionError(res.error ?? "Something went wrong. Please try again.");
-    await load();
-    setBusyId(null);
+    try {
+      const res = await action();
+      if (!res.ok) setActionError(res.error ?? "Something went wrong. Please try again.");
+      await load();
+    } finally {
+      busyRef.current = false;
+      setBusyId(null);
+    }
   };
 
   if (items.length === 0) return null;

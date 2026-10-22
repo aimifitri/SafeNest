@@ -28,6 +28,8 @@ export function useCircleBroadcast(childId: string | null) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
+  // True while the shown error only means a background refresh failed. It clears itself when a refresh works again.
+  const refreshErrorRef = useRef(false);
   const expiredFor = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -36,11 +38,20 @@ export function useCircleBroadcast(childId: string | null) {
     if (res.ok) {
       setAvailable(true);
       setBroadcast(res.data);
+      if (refreshErrorRef.current) {
+        refreshErrorRef.current = false;
+        setError(null);
+      }
     } else if (res.missing) {
       setAvailable(false);
       setBroadcast(null);
     } else {
-      setError(res.error); // keep what was shown, do not pretend it is fresh
+      // Keep what was shown, do not pretend it is fresh. A message from a failed action is not overwritten.
+      setError((prev) => {
+        if (prev !== null) return prev;
+        refreshErrorRef.current = true;
+        return "Cannot refresh right now. Showing the last known status.";
+      });
     }
   }, [childId]);
 
@@ -99,6 +110,7 @@ export function useCircleBroadcast(childId: string | null) {
   const run = async (action: () => Promise<{ ok: boolean; error?: string }>): Promise<boolean> => {
     if (busyRef.current) return false;
     busyRef.current = true;
+    refreshErrorRef.current = false;
     setBusy(true);
     setError(null);
     try {

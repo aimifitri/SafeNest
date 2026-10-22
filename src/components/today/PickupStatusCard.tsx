@@ -63,7 +63,7 @@ export function PickupStatusCard({ pf, childName }: { pf: Flow; childName: strin
 
   const variant = flow.tone === "warning" || flow.tone === "danger" ? "warning" : "hero";
   const prominentPair = flow.phase === "late" || flow.phase === "ask_now" || flow.phase === "nobody";
-  const small = flow.phase === "on_time" || flow.phase === "asking" || flow.phase === "travelling" || flow.phase === "at_school" || flow.phase === "teacher_rejected";
+  const small = flow.phase === "on_time" || flow.phase === "asking" || flow.phase === "travelling" || flow.phase === "at_school";
 
   const button = (action: FlowAction, kind: "p" | "o" | "s", sm = false) => (
     <Btn key={action.id} kind={kind} sm={sm} loading={pending === action.id} disabled={locked} onPress={() => void press(action.id)}>

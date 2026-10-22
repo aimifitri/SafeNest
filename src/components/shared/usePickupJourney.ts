@@ -23,12 +23,26 @@ export function usePickupJourney(childId: string | null) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
+  // True while the shown error only means a background refresh failed. It clears itself when a refresh works again.
+  const refreshErrorRef = useRef(false);
 
   const refresh = useCallback(async () => {
     if (!childId) return;
     const res = await fetchLatestJourney(childId);
-    if (res.ok) setJourney(toLiveJourney(res.data));
-    else setError(res.error); // keep what was shown, do not pretend it is fresh
+    if (res.ok) {
+      setJourney(toLiveJourney(res.data));
+      if (refreshErrorRef.current) {
+        refreshErrorRef.current = false;
+        setError(null);
+      }
+    } else {
+      // Keep what was shown, do not pretend it is fresh. A message from a failed action is not overwritten.
+      setError((prev) => {
+        if (prev !== null) return prev;
+        refreshErrorRef.current = true;
+        return "Cannot refresh right now. Showing the last known status.";
+      });
+    }
   }, [childId]);
 
   useEffect(() => {
@@ -51,6 +65,7 @@ export function usePickupJourney(childId: string | null) {
   const run = async (action: () => Promise<ApiResult<unknown>>): Promise<boolean> => {
     if (busyRef.current) return false;
     busyRef.current = true;
+    refreshErrorRef.current = false;
     setBusy(true);
     setError(null);
     try {
