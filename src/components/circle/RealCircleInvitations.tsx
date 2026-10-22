@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AppState, Share, Text, View } from "react-native";
+import { AppState, Platform, Share, Text, View } from "react-native";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../shared/AuthContext";
 import { Card } from "../shared/Card";
@@ -8,14 +8,16 @@ import { loadAdminFamilies, selectAdminFamily, type AdminFamily } from "./adminF
 import { createInvitationLifecycle } from "./invitationLifecycle";
 import { createInvitationApi, type Approval, type Invitation } from "./invitationApi";
 
+type Purpose = "all" | "join" | "invite" | "review";
 const api = createInvitationApi((name, args) => supabase.rpc(name, args));
-export function RealCircleInvitations() {
+export function RealCircleInvitations({ purpose = "all", onApproved }: { purpose?: Purpose; onApproved?: () => Promise<void> }) {
   const { session, familyId, loading } = useAuth();
   if (loading) return <T>Loading your account...</T>;
   if (!session) return <T>Sign in to join a real Circle.</T>;
-  return <InvitationFamilies key={session.user.id} userId={session.user.id} currentFamily={familyId} />;
+  if (purpose === "join") return <AccountInvitations key={session.user.id} purpose="join" familyId={null} isAdmin={false} />;
+  return <InvitationFamilies onApproved={onApproved} purpose={purpose} key={session.user.id} userId={session.user.id} currentFamily={familyId} />;
 }
-function InvitationFamilies({ userId, currentFamily }: { userId: string; currentFamily: string | null }) {
+function InvitationFamilies({ userId, currentFamily, purpose, onApproved }: { userId: string; currentFamily: string | null; purpose: Purpose; onApproved?: () => Promise<void> }) {
   const [families, setFamilies] = useState<AdminFamily[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,10 +43,10 @@ function InvitationFamilies({ userId, currentFamily }: { userId: string; current
     {loading ? <T>Loading administrator families...</T> : error ? <View accessibilityRole="alert"><T c={colors.danger}>Unable to load administrator families. Use Refresh to retry. Joining another Circle is still available below.</T></View> : families.length === 0 ? <T>You have no administrator families.</T> : families.map(family => <Btn key={family.id} kind={family.id === familyId ? "p" : "o"} onPress={() => setSelected(family.id)} label={`Manage ${family.name}, ${family.id}${family.id === familyId ? ", selected" : ""}`}>
       {family.id === familyId ? "Selected: " : "Manage: "}{family.name} ({family.id})
     </Btn>)}
-    <AccountInvitations key={`${userId}:${familyId ?? "none"}`} familyId={familyId} isAdmin={familyId !== null} />
+    <AccountInvitations onApproved={onApproved} purpose={purpose} key={`${userId}:${familyId ?? "none"}`} familyId={familyId} isAdmin={familyId !== null} />
   </View>;
 }
-function AccountInvitations({ familyId, isAdmin }: { familyId: string | null; isAdmin: boolean }) {
+function AccountInvitations({ familyId, isAdmin, purpose, onApproved }: { familyId: string | null; isAdmin: boolean; purpose: Purpose; onApproved?: () => Promise<void> }) {
   const colors = useColors();
   const [token, setToken] = useState("");
   const [name, setName] = useState("");
@@ -88,6 +90,7 @@ function AccountInvitations({ familyId, isAdmin }: { familyId: string | null; is
     if (result.ok) setQueue(result.data); else { setQueue(null); setError(result.error); }
   }
   return <Card style={{ gap: 12 }}>
+    {(purpose === "all" || purpose === "join") ? <>
     <T w={800}>Real account: Join Circle</T>
     <T c="muted">These actions use your signed-in account. They are separate from the fictional demo below. Joining stays pending until the family administrator approves.</T>
     <Input accessibilityLabel="Secure invitation code" placeholder="Paste invitation code" value={token} onChangeText={setToken} secureTextEntry autoCapitalize="none" autoCorrect={false} maxLength={512} editable={!busy} />
@@ -98,7 +101,9 @@ function AccountInvitations({ familyId, isAdmin }: { familyId: string | null; is
       if (result.ok) setNotice("Request received. Awaiting administrator approval. Open Joined Circles and tap Refresh to view Pending or Active status.");
       else setError(result.error);
     })}>Request to join Circle</Btn>
+    </> : null}
     {isAdmin && familyId ? <>
+      {(purpose === "all" || purpose === "invite") ? <>
       <T w={800}>Administrator: Invite a helper</T>
       <Input accessibilityLabel="Intended helper name" placeholder="Intended helper name" value={name} onChangeText={setName} maxLength={200} editable={!busy} />
       <Input accessibilityLabel="Helper relationship" placeholder="Relationship (optional)" value={relationship} onChangeText={setRelationship} maxLength={200} editable={!busy} />
@@ -112,11 +117,20 @@ function AccountInvitations({ familyId, isAdmin }: { familyId: string | null; is
         <Banner>This code grants the ability to request membership, never automatic approval. Share privately with the intended person. It is shown only in this session.</Banner>
         <Text selectable style={{ color: colors.ink }} accessibilityLabel="Generated invitation code">{invitation.invite_token}</Text>
         <T s={0.8}>Expires {new Date(invitation.expires_at).toLocaleString()}</T>
+        {Platform.OS !== "web" ? <T s={0.8} c="muted">To copy on your phone, press and hold the invitation code above and choose Copy.</T> : null}
+        <Btn kind="o" disabled={busy} onPress={() => void perform(async () => {
+          if (Platform.OS === "web" && typeof navigator !== "undefined" && navigator.clipboard) {
+            await navigator.clipboard.writeText(invitation.invite_token);
+            if (canPublish()) setNotice("Invitation code copied. Share privately.");
+          } else if (canPublish()) setNotice("Press and hold the selectable invitation code above, then choose Copy. No clipboard dependency is installed.");
+        })}>Copy Invitation</Btn>
         <Btn kind="o" disabled={busy} onPress={() => void perform(async () => {
           await Share.share({ message: `SafeNest invitation code: ${invitation.invite_token}\nEnter this privately in Circle > Real account: Join Circle. Administrator approval is required.` });
-        })}>Share invitation privately</Btn>
+        })}>Share Invitation</Btn>
         <Btn kind="o" disabled={busy} onPress={() => setInvitation(null)}>Dismiss code</Btn>
       </View> : null}
+      </> : null}
+      {(purpose === "all" || purpose === "review") ? <>
       <T w={800}>Administrator: Pending requests</T>
       <T c="muted">Verify the person independently before approving. Profile names are self-reported; compare the account ID through a trusted channel. If unsure, leave the request pending. Rejection is not available in this phase.</T>
       <Btn kind="o" disabled={busy} onPress={() => void perform(refreshQueue)}>Refresh pending requests</Btn>
@@ -132,11 +146,14 @@ function AccountInvitations({ familyId, isAdmin }: { familyId: string | null; is
           const result = await api.approve(row.membership_id);
           if (!canPublish()) return;
           if (!result.ok) { setError(result.error); return; }
+          await onApproved?.();
+          if (!canPublish()) return;
           await refreshQueue();
           if (canPublish()) setNotice("Helper approved. They can refresh Joined Circles to see Active status. Membership alone does not grant every pickup permission.");
         })}>Approve helper</Btn>
       </Card>)}
-    </> : <T c="muted">Invitation creation and approval require your real family's administrator role.</T>}
+      </> : null}
+    </> : purpose === "join" ? null : <T c="muted">Invitation creation and approval require your real family's administrator role.</T>}
     {busy ? <View accessibilityLiveRegion="polite"><T>Working...</T></View> : null}
     {notice ? <Banner>{notice}</Banner> : null}
     {error ? <View accessibilityRole="alert"><T c={colors.danger}>{error}</T></View> : null}

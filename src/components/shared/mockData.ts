@@ -14,7 +14,7 @@ export const mockData: SafeNestMockData = {
   ],
   trustedHelpers: [
     { id: "ahmad", name: "Encik Ahmad", role: "Uncle", state: "active", locationLabel: "Work (demo)" },
-    { id: "ima", name: "Kak Ima", role: "Aunt", state: "active", locationLabel: "Home (demo)" },
+    { id: "ima", name: "Kak Ima", role: "Neighbour", state: "active", locationLabel: "Home (demo)" },
     { id: "salmah", name: "Pn. Salmah", role: "Neighbour", state: "pending" },
   ],
   school: {

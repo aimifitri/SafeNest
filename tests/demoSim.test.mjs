@@ -35,7 +35,7 @@ const people = [
   { id: "siti", name: "Siti", role: "Parent", kind: "family", approved: true },
   { id: "aiman", name: "Aiman", role: "Brother", kind: "family", approved: true },
   { id: "ahmad", name: "Encik Ahmad", role: "Uncle", kind: "circle", approved: true },
-  { id: "ima", name: "Kak Ima", role: "Aunt", kind: "circle", approved: true },
+  { id: "ima", name: "Kak Ima", role: "Neighbour", kind: "circle", approved: true },
   { id: "salmah", name: "Pn. Salmah", role: "Neighbour", kind: "circle", approved: false },
 ];
 const env = { people, viewerId: "abu", viewerName: "Abu", planDismiss: 13 * 60, teacherName: "Cikgu Aisyah" };
