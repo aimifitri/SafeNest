@@ -31,6 +31,7 @@ async function run<T>(fn: () => PromiseLike<{ data: T | null; error: Err }>): Pr
 export function friendlyCircleError(message: string | undefined): string {
   const m = (message ?? "").toLowerCase();
   if (m.includes("already covered") || m.includes("already accepted")) return "Someone already accepted. Nothing else was sent.";
+  if (m.includes("nobody available")) return "Nobody is available right now. Approved people are outside their pickup hours or have paused requests. Try again later or call someone directly.";
   if (m.includes("nobody to ask")) return "Nobody can be asked yet. No approved family member or helper has joined SafeNest.";
   if (m.includes("not opted in")) return "Automatic backup is not turned on for this child.";
   if (m.includes("too early")) return "That request is still open. It can only expire after the waiting time.";

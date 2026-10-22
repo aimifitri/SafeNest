@@ -1,56 +1,73 @@
-# Welcome to your Expo app 👋
+# SafeNest
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+SafeNest is a family pickup coordination app built with Expo, React Native, TypeScript, and Expo Router. It brings together a family's pickup plan, trusted helpers, pickup status, and account settings.
 
-## Get started
+The app includes both Supabase-backed features and clearly marked demo behavior. Backend readiness varies by feature: do not assume that invitations, approvals, pickup permissions, or broadcast requests are production-ready. See [AGENTS.md](AGENTS.md) for the project's coordination and safety rules.
 
-1. Install dependencies
+## Requirements
 
-   ```bash
-   npm install
-   ```
+- Node.js and npm
+- Expo Go or a configured iOS, Android, or web development environment
+- Supabase project URL and a public anon/publishable key for the connected account features
 
-2. Start the app
+## Set up
 
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+Install dependencies:
 
 ```bash
-npm run reset-project
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Create a `.env` file in the project root with the values for your team's Supabase project:
 
-### Other setup steps
+```env
+EXPO_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=YOUR_PUBLIC_ANON_OR_PUBLISHABLE_KEY
+```
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+Use the project URL itself; do not append `/rest/v1/`. The app reads these variables when Expo starts, so restart the dev server after changing `.env`.
 
-## Learn more
+`.env` is ignored by Git. `EXPO_PUBLIC_` values are included in the client app and are not secrets. Use only the project's public anon/publishable key. Never use or commit a service-role key or other secret.
 
-To learn more about developing your project with Expo, look at the following resources:
+Start Expo and clear its cache:
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+```bash
+npx expo start --clear
+```
 
-## Join the community
+If the default port is already in use, choose another one:
 
-Join our community of developers creating universal apps.
+```bash
+npx expo start --clear --port 8082
+```
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Platform shortcuts are also available:
+
+```bash
+npm run android
+npm run ios
+npm run web
+```
+
+## App structure
+
+- `src/app/` contains the Expo Router layout and routes for Today, Circle, Plan, and Settings.
+- `src/components/` contains screen-specific and reusable UI, account, onboarding, pickup, and Supabase integration code.
+- `src/lib/supabase.ts` configures the Supabase client from the local environment.
+- `design_reference/` contains historical HTML prototype material. Use it for product context when helpful; the current app design and approved improvements take precedence.
+- `supabase/` contains SQL schema and migration files. Their presence does not mean they have been approved or applied to the shared project.
+- `tests/` and `supabase/tests/` contain local logic and database-related checks.
+
+## Development guidance
+
+- Read [AGENTS.md](AGENTS.md) before making changes. It covers design references, team file ownership, backend boundaries, and the required review workflow.
+- Preserve existing Expo Router routes and styling conventions. Keep screen-specific components with their screen and shared components in the shared area.
+- Use local mock state for demo flows and label it clearly. Verify the status of a backend feature before wiring UI to it.
+- Do not change Trusted Circle database functions, apply migrations, or run `supabase db push` / `supabase db reset` without coordinating with the project owner.
+- Run the TypeScript check before completing implementation work:
+
+  ```bash
+  npx tsc --noEmit
+  ```
+
+Test affected screens and navigation in Expo Go when available, and report checks and remaining simulated behavior accurately.

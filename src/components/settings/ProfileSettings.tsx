@@ -1,8 +1,8 @@
-import * as ImagePicker from "expo-image-picker";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import type { ViewStyle } from "react-native";
-import { Image, Linking, Text, View } from "react-native";
+import { Text, View } from "react-native";
+import { useLocalSearchParams } from "expo-router";
 import Animated from "react-native-reanimated";
 
 import { Icon } from "../navigation/Icon";
@@ -12,91 +12,39 @@ import { AppShell } from "../shared/AppShell";
 import { Avatar } from "../shared/Avatar";
 import { Card } from "../shared/Card";
 import { SectionHeading } from "../shared/SectionHeading";
-import { Sheet } from "../shared/Sheet";
-import { mockData } from "../shared/mockData";
+import { useHousehold } from "../shared/HouseholdContext";
+import { accountTypeLabel } from "../shared/accountRules";
 import { anim } from "../shared/motion";
 import type { FontStyle, TextScale, ThemeMode } from "../shared/theme";
 import { fontFace, getFontSpec } from "../shared/theme";
-import type { Caregiver } from "../shared/types";
 import {
   Banner,
   Btn,
   Chip,
-  Dl,
-  Err,
-  Field,
-  Input,
-  LRow,
   OS_FONT_CAP,
   Press,
   Rise,
   SIc,
   SRow,
   Seg,
-  SmallBtn,
   Switch,
   T,
   useColors,
   useReduce,
 } from "../shared/ui";
+import { AvailabilityEditor } from "./AvailabilityEditor";
+import { HouseholdPage } from "./HouseholdPage";
+import { MyProfilePage } from "./MyProfilePage";
 import { SchoolPreferences } from "./SchoolPreferences";
+import { SecurityPage } from "./SecurityPage";
 
-// Settings follows the prototype's settings screen: a profile card and grouped rows on the home page,
-// each row opening a sub-page (Back returns home), and bottom sheets for editing. Built from the same
-// shared components as Today, Circle and Plan, so fonts, text size and Light/Dark follow the app.
+// Settings: a profile card and grouped rows on the home page, each row opening a sub-page (Back returns home).
+// Account pages read and write the signed-in person's real data. Appearance and notification choices are
+// preferences on this phone. Demo Mode shows sample data and saves nothing.
 
-type LocalAccount = Caregiver & {
-  password: string;
-  photoUri: string | null;
-};
-
-type AccountDraft = Pick<Caregiver, "name" | "phone" | "email" | "role"> & {
-  password: string;
-  photoUri: string | null;
-};
-
-type AccordionKey = "account" | "appearance" | "notifications" | "family" | "security" | "privacy";
-type ModalKind = "addAccount" | "editAccount" | "addChild" | "forgotPassword" | null;
-type PhotoTarget = "active" | "new" | "edit";
+type AccordionKey = "profile" | "availability" | "household" | "appearance" | "notifications" | "security" | "privacy";
 type PushPreferenceKey = "pickupReminder" | "helperAvailability" | "systemAlerts";
 type PasskeyMethod = "devicePin" | "faceId" | "fingerprint";
-const showDemoAccountOptions = false;
-
-type ChildProfile = {
-  id: string;
-  name: string;
-  age: number;
-  schoolName: string;
-  schoolAddress: string;
-  className: string;
-  teacherName: string;
-  teacherPhone: string;
-};
-
-type ChildDraft = Omit<ChildProfile, "id" | "age"> & {
-  age: string;
-};
-
-const initialChild: ChildProfile = {
-  id: mockData.child.id,
-  name: mockData.child.name,
-  age: mockData.child.age,
-  schoolName: mockData.school.name,
-  schoolAddress: mockData.school.address,
-  className: mockData.child.className,
-  teacherName: mockData.school.teacher,
-  teacherPhone: mockData.school.teacherPhone,
-};
-
-const emptyChildDraft: ChildDraft = {
-  name: "",
-  age: "",
-  schoolName: "",
-  schoolAddress: "",
-  className: "",
-  teacherName: "",
-  teacherPhone: "",
-};
 
 const pushNotificationOptions: {
   key: PushPreferenceKey;
@@ -147,16 +95,18 @@ const textScaleOptions: { value: TextScale; label: string }[] = [
 ];
 
 const accordionOptions: { key: AccordionKey; title: string; icon: string }[] = [
-  { key: "account", title: "Account", icon: "me" },
+  { key: "profile", title: "My profile", icon: "me" },
+  { key: "availability", title: "My pickup availability", icon: "clock" },
+  { key: "household", title: "Household and children", icon: "school" },
   { key: "appearance", title: "Appearance", icon: "look" },
   { key: "notifications", title: "Notifications", icon: "bell" },
-  { key: "family", title: "Family and school", icon: "school" },
-  { key: "security", title: "Passkey & Security", icon: "key" },
+  { key: "security", title: "Password and security", icon: "key" },
   { key: "privacy", title: "Privacy", icon: "lock" },
 ];
 
 export function ProfileSettings() {
-  const { signOut } = useAuth();
+  const { signOut, profile, demo, exitDemo, caregiver } = useAuth();
+  const household = useHousehold();
   const {
     theme,
     themeMode,
@@ -165,23 +115,10 @@ export function ProfileSettings() {
     setTextScale,
     fontStyle,
     setFontStyle,
-    selectedCaregiver,
-    selectCaregiver,
-    clearCaregiver,
     trustedHelpers,
   } = useAppContext();
-  const [accounts, setAccounts] = useState<LocalAccount[]>(() => (
-    selectedCaregiver
-      ? [{ ...selectedCaregiver, password: "", photoUri: null }]
-      : []
-  ));
-  const [activeAccountId, setActiveAccountId] = useState(selectedCaregiver?.id ?? "");
-  // Settings home (null) or one sub-page, like the prototype's settings pages.
   const [page, setPage] = useState<AccordionKey | null>(null);
-  // True right after going back, so the home page slides in from the left.
   const [backed, setBacked] = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState(true);
-  const [showPassword, setShowPassword] = useState(false);
   const [pushNotifications, setPushNotifications] = useState<Record<PushPreferenceKey, boolean>>({
     pickupReminder: true,
     helperAvailability: true,
@@ -190,312 +127,30 @@ export function ProfileSettings() {
   const [notificationBanner, setNotificationBanner] = useState<string | null>(null);
   const [passkeyEnabled, setPasskeyEnabled] = useState(false);
   const [passkeyMethod, setPasskeyMethod] = useState<PasskeyMethod>("faceId");
-  const [modalKind, setModalKind] = useState<ModalKind>(null);
   const [feedback, setFeedback] = useState("");
-  const [formError, setFormError] = useState("");
-  const [children, setChildren] = useState<ChildProfile[]>([initialChild]);
-  const [childDraft, setChildDraft] = useState<ChildDraft>(emptyChildDraft);
-  const [draft, setDraft] = useState<AccountDraft>({
-    name: "",
-    phone: "",
-    email: "",
-    role: "",
-    password: "",
-    photoUri: null,
-  });
-  const [resetChannel, setResetChannel] = useState<"SMS" | "Email">("SMS");
-  const [pinSent, setPinSent] = useState(false);
-  const [pin, setPin] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-
-  const accountState = selectedCaregiver?.id === activeAccountId
-    ? accounts.find((account) => account.id === activeAccountId)
-    : undefined;
-  const activeAccount: LocalAccount = selectedCaregiver
-    ? {
-        ...selectedCaregiver,
-        password: accountState?.password ?? "",
-        photoUri: accountState?.photoUri ?? null,
-      }
-    : {
-        id: "",
-        name: "",
-        role: "",
-        email: "",
-        phone: "",
-        isAdmin: false,
-        password: "",
-        photoUri: null,
-      };
   const c = theme.colors;
-  const approvedHelpers = trustedHelpers.filter((helper) => helper.state === "active").length;
-  const { familyMembers } = mockData;
-
+  const params = useLocalSearchParams<{ page?: string }>();
   useEffect(() => {
-    if (selectedCaregiver) {
-      setActiveAccountId(selectedCaregiver.id);
-      setAccounts((current) => current.some((account) => account.id === selectedCaregiver.id)
-        ? current
-        : [...current, { ...selectedCaregiver, password: "", photoUri: null }]);
+    const wanted = accordionOptions.find((o) => o.key === params.page)?.key;
+    if (wanted) {
+      setBacked(false);
+      setPage(wanted);
     }
-  }, [selectedCaregiver]);
+  }, [params.page]);
+  const approvedHelpers = trustedHelpers.filter((helper) => helper.state === "active").length;
 
-  // Confirmations are brief: they show for a few seconds, then clear so they do not follow you onto every page.
   useEffect(() => {
     if (!feedback) return;
     const id = setTimeout(() => setFeedback(""), 4500);
     return () => clearTimeout(id);
   }, [feedback]);
 
-  const updateDraft = (key: keyof AccountDraft, value: string | null) => {
-    setDraft((current) => ({ ...current, [key]: value }));
-    setFormError("");
-  };
-
-  const choosePhoto = async (target: PhotoTarget) => {
-    try {
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) {
-        setFeedback("Photo access was not granted. Update your device permission to choose a photo.");
-        return;
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ["images"],
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.85,
-      });
-      const selectedPhoto = result.assets?.[0]?.uri;
-      if (result.canceled || !selectedPhoto) return;
-
-      if (target === "active") {
-        setAccounts((current) => current.map((account) => (
-          account.id === activeAccount.id ? { ...account, photoUri: selectedPhoto } : account
-        )));
-        setFeedback("Profile photo updated for this demo session.");
-      } else {
-        updateDraft("photoUri", selectedPhoto);
-      }
-    } catch (error) {
-      setFeedback(error instanceof Error
-        ? `Unable to select a photo: ${error.message}`
-        : "Unable to select a photo.");
-    }
-  };
-
-  const openAccountModal = (kind: "addAccount" | "editAccount") => {
-    setFormError("");
-    if (kind === "addAccount") {
-      setDraft({ name: "", phone: "", email: "", role: "", password: "", photoUri: null });
-    } else {
-      setDraft({
-        name: activeAccount.name,
-        phone: activeAccount.phone,
-        email: activeAccount.email,
-        role: activeAccount.role,
-        password: activeAccount.password,
-        photoUri: activeAccount.photoUri,
-      });
-    }
-    setModalKind(kind);
-  };
-
-  const saveAccountEdit = () => {
-    if (!draft.name.trim() || !draft.role.trim()) {
-      setFormError("Enter a name and relationship.");
-      return;
-    }
-    if (!isValidPhone(draft.phone)) {
-      setFormError("Enter a valid phone number with at least 9 digits.");
-      return;
-    }
-    if (!isValidEmail(draft.email)) {
-      setFormError("Enter a valid email address.");
-      return;
-    }
-
-    const updatedAccount = {
-      ...activeAccount,
-      name: draft.name.trim(),
-      phone: draft.phone.trim(),
-      email: draft.email.trim(),
-      role: draft.role.trim(),
-      photoUri: draft.photoUri,
-    };
-    setAccounts((current) => current.map((account) => (
-      account.id === activeAccount.id ? updatedAccount : account
-    )));
-    selectCaregiver(updatedAccount);
-    setFeedback("Account details updated for this demo session.");
-    setModalKind(null);
-  };
-
-  const openChildModal = () => {
-    setChildDraft(emptyChildDraft);
-    setFormError("");
-    setModalKind("addChild");
-  };
-
-  const updateChildDraft = (key: keyof ChildDraft, value: string) => {
-    setChildDraft((current) => ({ ...current, [key]: value }));
-    setFormError("");
-  };
-
-  const addChild = () => {
-    const age = Number(childDraft.age);
-    const requiredFields = [
-      childDraft.name,
-      childDraft.age,
-      childDraft.schoolName,
-      childDraft.schoolAddress,
-      childDraft.className,
-      childDraft.teacherName,
-      childDraft.teacherPhone,
-    ];
-
-    if (requiredFields.some((value) => !value.trim())) {
-      setFormError("Complete all child and school details.");
-      return;
-    }
-    if (!Number.isInteger(age) || age < 1 || age > 18) {
-      setFormError("Enter an age from 1 to 18.");
-      return;
-    }
-    if (!isValidPhone(childDraft.teacherPhone)) {
-      setFormError("Enter a valid teacher phone number with at least 9 digits.");
-      return;
-    }
-
-    const newChild: ChildProfile = {
-      id: `child-${Date.now()}`,
-      name: childDraft.name.trim(),
-      age,
-      schoolName: childDraft.schoolName.trim(),
-      schoolAddress: childDraft.schoolAddress.trim(),
-      className: childDraft.className.trim(),
-      teacherName: childDraft.teacherName.trim(),
-      teacherPhone: childDraft.teacherPhone.trim(),
-    };
-    setChildren((current) => [...current, newChild]);
-    setFeedback(`${newChild.name} added for this demo session.`);
-    setChildDraft(emptyChildDraft);
-    setFormError("");
-    setModalKind(null);
-  };
-
-  const openTeacherWhatsApp = async (phone: string) => {
-    const digits = phone.replace(/\D/g, "");
-    const internationalDigits = digits.startsWith("00")
-      ? digits.slice(2)
-      : digits.startsWith("0")
-        ? `60${digits.slice(1)}`
-        : digits;
-
-    if (internationalDigits.length < 9) {
-      setFeedback("Enter a valid teacher phone number before opening WhatsApp.");
-      return;
-    }
-
-    try {
-      await Linking.openURL(`https://wa.me/${internationalDigits}`);
-    } catch (error) {
-      setFeedback(error instanceof Error
-        ? `Unable to open WhatsApp: ${error.message}`
-        : "Unable to open WhatsApp.");
-    }
-  };
-
-  const addAccount = () => {
-    if (!draft.name.trim() || !draft.password || !draft.role.trim()) {
-      setFormError("Enter a full name, password, and relationship.");
-      return;
-    }
-    if (!isValidPhone(draft.phone)) {
-      setFormError("Enter a valid phone number with at least 9 digits.");
-      return;
-    }
-    if (!isValidEmail(draft.email)) {
-      setFormError("Enter a valid email address.");
-      return;
-    }
-
-    const newAccount: LocalAccount = {
-      id: `local-${Date.now()}`,
-      name: draft.name.trim(),
-      password: draft.password,
-      phone: draft.phone.trim(),
-      role: draft.role.trim(),
-      email: draft.email.trim(),
-      photoUri: draft.photoUri,
-      isAdmin: false,
-    };
-    setAccounts((current) => [...current, newAccount]);
-    setActiveAccountId(newAccount.id);
-    selectCaregiver(newAccount);
-    setIsLoggedIn(true);
-    setFeedback(`${newAccount.name} added and selected for this demo session.`);
-    setModalKind(null);
-  };
-
-  const switchAccount = (account: LocalAccount) => {
-    setActiveAccountId(account.id);
-    selectCaregiver(account);
-    setIsLoggedIn(true);
-    setShowPassword(false);
-    setFeedback(`Logged in as ${account.name}.`);
-  };
-
-  const logOut = () => {
-    void signOut();
-    clearCaregiver();
-    setIsLoggedIn(false);
-    setPage(null);
-    setShowPassword(false);
-    setNotificationBanner(null);
-    setFeedback("You are logged out. Log in with another account or create a new one.");
-  };
-
-  const closeModal = () => {
-    setModalKind(null);
-    setFormError("");
-    setPinSent(false);
-    setPin("");
-    setNewPassword("");
-    setConfirmPassword("");
-  };
-
-  const sendResetPin = () => {
-    setPinSent(true);
-    setFeedback(`Demo verification PIN sent by ${resetChannel} to ${resetChannel === "SMS" ? activeAccount.phone : activeAccount.email}.`);
-  };
-
-  const resetPassword = () => {
-    if (pin !== "123456") {
-      setFormError("That demo PIN is incorrect. Use 123456.");
-      return;
-    }
-    if (newPassword.length < 8) {
-      setFormError("Use at least 8 characters for your new password.");
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setFormError("The passwords do not match.");
-      return;
-    }
-    setAccounts((current) => current.map((account) => (
-      account.id === activeAccount.id ? { ...account, password: newPassword } : account
-    )));
-    setFeedback("Password reset for this demo session.");
-    closeModal();
-  };
-
+  const name = demo ? caregiver?.name ?? "Demo parent" : profile?.fullName || caregiver?.name || "";
+  const roleLabel = demo ? "Demo Mode" : accountTypeLabel(profile?.accountType);
   const openPage = (key: AccordionKey) => {
     setBacked(false);
     setPage(key);
   };
-
   const closePage = () => {
     setBacked(true);
     setPage(null);
@@ -506,7 +161,7 @@ export function ProfileSettings() {
   const pushOnCount = Object.values(pushNotifications).filter(Boolean).length;
   const pageTitle = page ? accordionOptions.find((option) => option.key === page)?.title ?? "Settings" : "Settings";
   const motion: PageMotion = page ? "pushIn" : backed ? "popIn" : null;
-
+  const kids = household.children.length;
   const banners = (
     <>
       {feedback ? (
@@ -530,174 +185,110 @@ export function ProfileSettings() {
       ) : null}
     </>
   );
-
   const fontPreview = (
     <Card>
       <T s={0.72} w={700} ls={0.06} up c="muted">Preview</T>
       <View style={{ marginTop: 6 }}><T s={1.15} w={800} ls={-0.01} lh={1.25}>Pickup plan ready</T></View>
-      <View style={{ marginTop: 4 }}><T s={0.92} c="muted" lh={1.4}>Laila’s school pickup details are easy to read with your selected style.</T></View>
+      <View style={{ marginTop: 4 }}><T s={0.92} c="muted" lh={1.4}>School pickup details are easy to read with your selected style.</T></View>
     </Card>
   );
 
   return (
     <AppShell
-      title={isLoggedIn ? pageTitle : "Settings"}
+      title={pageTitle}
       badge="Profile"
       activeTab="settings"
-      back={isLoggedIn && page ? { label: "Settings", onPress: closePage } : undefined}
+      back={page ? { label: "Settings", onPress: closePage } : undefined}
     >
       {banners}
-
-      {!isLoggedIn ? (
-        <>
-          <Card>
-            <T s={1.15} w={800} lh={1.3}>You are logged out</T>
-            <View style={{ marginTop: 4 }}><T s={0.92} c="muted" lh={1.4}>Log in with the account you want to use.</T></View>
-          </Card>
-          {showDemoAccountOptions ? (
-            <>
-              <SectionHeading title="Log in with another account" />
-              <Card tight>
-                {accounts.map((account, index) => (
-                  <Press
-                    key={account.id}
-                    onPress={() => switchAccount(account)}
-                    label={`Log in as ${account.name}`}
-                    scaleTo={0.985}
-                    style={{ flexDirection: "row", alignItems: "center", gap: 12, minHeight: 64, paddingVertical: 10, borderTopWidth: index === 0 ? 0 : 1, borderTopColor: c.line }}
-                  >
-                    <Avatar name={account.name} imageUri={account.photoUri ?? undefined} size={40} />
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <T w={700}>{account.name}</T>
-                      <T s={0.84} c="muted">{account.role}</T>
-                    </View>
-                    <T s={0.9} w={700} c={c.primaryInk}>Log in</T>
-                  </Press>
-                ))}
-              </Card>
-              <Btn kind="s" icon="userplus" onPress={() => openAccountModal("addAccount")}>Create new account</Btn>
-              <Note>Demo only · Account sign-in and creation use local screen state.</Note>
-            </>
-          ) : null}
-        </>
-      ) : page === null ? (
+      {page === null ? (
         <Page key="home" motion={motion}>
-          {/* Profile card, like the prototype's settings home */}
+          {demo ? (
+            <Banner>Demo Mode. Sample people and made-up data. Nothing is saved and nobody is contacted.</Banner>
+          ) : null}
           <Card tight>
             <Press
-              onPress={() => openPage("account")}
-              label={`${activeAccount.name}, ${activeAccount.role}. Open account`}
+              onPress={() => openPage("profile")}
+              label={`${name}, ${roleLabel}. Open my profile`}
               scaleTo={0.985}
               style={{ flexDirection: "row", alignItems: "center", gap: 14, minHeight: 84, paddingVertical: 12 }}
             >
-              <Avatar name={activeAccount.name} imageUri={activeAccount.photoUri ?? undefined} size={56} />
+              <Avatar name={name} size={56} />
               <View style={{ flex: 1, minWidth: 0 }}>
-                <T s={1.12} w={800} ls={-0.01} lh={1.3}>{activeAccount.name}</T>
-                <T s={0.88} c="muted" lh={1.35}>{activeAccount.role}</T>
-                <T s={0.84} c="muted" lh={1.35}>{activeAccount.email}</T>
+                <T s={1.12} w={800} ls={-0.01} lh={1.3}>{name || "Your profile"}</T>
+                <T s={0.88} c="muted" lh={1.35}>{roleLabel}</T>
+                <T s={0.84} c="muted" lh={1.35}>{demo ? "demo@example.com" : profile?.email ?? ""}</T>
               </View>
               <Icon name="chev" size={20} color={c.muted} stroke={2.2} />
             </Press>
           </Card>
-
+          <SectionHeading title="Pickup" />
+          <Card tight>
+            <SRow first icon="clock" title="My pickup availability" sub="When SafeNest may ask you to help" onPress={() => openPage("availability")} />
+            <SRow icon="school" title="Household and children" sub={`${kids} ${kids === 1 ? "child" : "children"} · ${approvedHelpers} ${approvedHelpers === 1 ? "helper" : "helpers"} approved`} onPress={() => openPage("household")} />
+          </Card>
           <SectionHeading title="Preferences" />
           <Card tight>
             <SRow first icon="look" title="Appearance" sub={`${themeLabel} · ${sizeLabel} text · ${fontLabel}`} onPress={() => openPage("appearance")} />
             <SRow icon="bell" title="Notifications" sub={`${pushOnCount} of ${pushNotificationOptions.length} alerts on · school alerts`} onPress={() => openPage("notifications")} />
           </Card>
-
-          <SectionHeading title="Family" />
+          <SectionHeading title="Password and security" />
           <Card tight>
-            <SRow first icon="school" title="Family and school" sub={`${children.length} ${children.length === 1 ? "child" : "children"} · ${approvedHelpers} ${approvedHelpers === 1 ? "helper" : "helpers"} ready`} onPress={() => openPage("family")} />
+            <SRow first icon="key" title="Password and security" sub={demo ? "Not available in Demo Mode" : "Change password or email"} onPress={() => openPage("security")} />
+            <SRow icon="lock" title="Privacy" sub="How SafeNest handles your data" onPress={() => openPage("privacy")} />
           </Card>
-
-          <SectionHeading title="Security and privacy" />
           <Card tight>
-            <SRow first icon="key" title="Passkey & Security" sub={passkeyEnabled ? `On · ${passkeyMethods.find((method) => method.value === passkeyMethod)?.label}` : "Not set up"} onPress={() => openPage("security")} />
-            <SRow icon="lock" title="Privacy" sub="How this demo handles your data" onPress={() => openPage("privacy")} />
+            {demo ? (
+              <Press onPress={exitDemo} label="Exit Demo Mode" scaleTo={0.985} style={{ flexDirection: "row", alignItems: "center", gap: 14, minHeight: 60, paddingVertical: 8 }}>
+                <SIc name="logout" />
+                <T w={700}>Exit Demo Mode</T>
+              </Press>
+            ) : (
+              <Press onPress={() => void signOut()} label="Log out of account" scaleTo={0.985} style={{ flexDirection: "row", alignItems: "center", gap: 14, minHeight: 60, paddingVertical: 8 }}>
+                <SIc name="logout" red />
+                <T w={700} c={c.danger}>Log Out</T>
+              </Press>
+            )}
           </Card>
-
-          <Card tight>
-            <Press onPress={logOut} label="Log out of account" scaleTo={0.985} style={{ flexDirection: "row", alignItems: "center", gap: 14, minHeight: 60, paddingVertical: 8 }}>
-              <SIc name="logout" red />
-              <T w={700} c={c.danger}>Log Out</T>
-            </Press>
-          </Card>
-          <Note>Settings are stored locally for this demo session.</Note>
         </Page>
       ) : (
         <Page key={page} motion={motion}>
-          {page === "account" ? (
+          {page === "profile" ? <MyProfilePage /> : null}
+          {page === "availability" ? <AvailabilityEditor /> : null}
+          {page === "household" ? <HouseholdPage /> : null}
+          {page === "security" ? (
             <>
-              <View style={{ alignItems: "center", gap: 8 }}>
-                <View>
-                  <Avatar name={activeAccount.name} imageUri={activeAccount.photoUri ?? undefined} size={88} />
-                  <Press
-                    onPress={() => void choosePhoto("active")}
-                    label="Change profile photo"
-                    hint="Choose a photo from your gallery"
-                    scaleTo={0.9}
-                    style={{ position: "absolute", right: -4, bottom: -4, width: 36, height: 36, borderRadius: 18, backgroundColor: c.primary, borderWidth: 3, borderColor: c.background, alignItems: "center", justifyContent: "center" }}
-                  >
-                    <Icon name="camera" size={16} color={c.onPrimary} stroke={2} />
-                  </Press>
-                </View>
-                <View style={{ alignItems: "center" }}>
-                  <T s={1.25} w={800} ls={-0.01} align="center" lh={1.3}>{activeAccount.name}</T>
-                  <T s={0.9} c="muted" align="center">{activeAccount.role}</T>
-                </View>
-                <Chip kind="ok" icon="check">Active account</Chip>
-              </View>
-
-              <Card tight>
-                <Dl first k="Name" v={activeAccount.name} />
-                <Dl k="Phone number" v={activeAccount.phone} />
-                <Dl k="Email" v={activeAccount.email} />
-                <Dl k="Relationship" v={activeAccount.role} />
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 10, borderTopWidth: 1, borderTopColor: c.line }}>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <T s={0.95} c="muted">Password</T>
-                    <T s={0.95} w={700} tab>{showPassword ? activeAccount.password : "••••••••"}</T>
-                  </View>
-                  <SmallBtn
-                    tone="on"
-                    onPress={() => setShowPassword((visible) => !visible)}
-                    label={showPassword ? "Hide password" : "Show password"}
-                  >
-                    {showPassword ? "Hide" : "Show"}
-                  </SmallBtn>
-                </View>
-              </Card>
-
-              <Btn kind="p" icon="me" onPress={() => openAccountModal("editAccount")}>Edit account details</Btn>
-              <Btn kind="o" icon="key" onPress={() => { setPinSent(false); setModalKind("forgotPassword"); }}>Forgot password?</Btn>
-
-              {showDemoAccountOptions ? (
+              <SecurityPage />
+              {demo ? (
                 <>
-                  <SectionHeading title="Switch account" />
-                  <Card tight style={{ paddingHorizontal: 4 }}>
-                    {accounts.map((account, index) => {
-                      const on = account.id === activeAccount.id;
-                      return (
-                        <LRow key={account.id} first={index === 0} on={on} a11y={`${account.name}, ${account.role}${on ? ", active" : ""}`} onPress={() => switchAccount(account)}>
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                            <Avatar name={account.name} imageUri={account.photoUri ?? undefined} size={40} />
-                            <View style={{ flex: 1, minWidth: 0 }}>
-                              <T w={on ? 800 : 700} c={on ? c.primaryInk : "ink"}>{account.name}</T>
-                              <T s={0.84} c="muted">{account.role}</T>
-                            </View>
-                          </View>
-                        </LRow>
-                      );
-                    })}
+                  <SectionHeading title="Passkey (demo only)" />
+                  <Card tight>
+                    <Press
+                      role="switch"
+                      label="Use a passkey"
+                      hint="Enable a simulated device login or recovery option."
+                      state={{ checked: passkeyEnabled }}
+                      scaleTo={0.985}
+                      onPress={() => setPasskeyEnabled((on) => !on)}
+                      style={{ flexDirection: "row", alignItems: "center", gap: 14, minHeight: 72, paddingVertical: 12 }}
+                    >
+                      <SIc name="key" />
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <T w={700}>Use a passkey</T>
+                        <T s={0.84} c="muted" lh={1.35}>Simulated. No device credential is used.</T>
+                      </View>
+                      <Switch on={passkeyEnabled} />
+                    </Press>
                   </Card>
-                  <Btn kind="dash" icon="userplus" onPress={() => openAccountModal("addAccount")}>Add account</Btn>
-                  <Note>Demo only · Account changes stay in app memory. No account is authenticated.</Note>
+                  <Card tight style={{ paddingHorizontal: 4 }}>
+                    {passkeyMethods.map((method, index) => (
+                      <MethodRow key={method.value} first={index === 0} icon={method.icon} label={method.label} on={passkeyMethod === method.value} disabled={!passkeyEnabled} onPress={() => setPasskeyMethod(method.value)} />
+                    ))}
+                  </Card>
                 </>
               ) : null}
             </>
           ) : null}
-
           {page === "appearance" ? (
             <>
               <SectionHeading title="Theme" />
@@ -711,7 +302,6 @@ export function ProfileSettings() {
                 }))}
               />
               <Note align="left">System / Auto follows your device appearance.</Note>
-
               <SectionHeading title="Text size" />
               <Seg<TextScale>
                 cur={textScale}
@@ -722,14 +312,12 @@ export function ProfileSettings() {
                   a11y: textScale === option.value ? `${option.label} text size, selected` : `${option.label} text size`,
                 }))}
               />
-
               <SectionHeading title="Font style" />
               <FontPicker value={fontStyle} onPick={setFontStyle} />
               {fontPreview}
               <Note>Text size and font style apply across the whole app.</Note>
             </>
           ) : null}
-
           {page === "notifications" ? (
             <>
               <SectionHeading title="Push notification alerts" />
@@ -757,189 +345,32 @@ export function ProfileSettings() {
                   );
                 })}
               </Card>
-              <Btn
-                kind="s"
-                icon="bell"
-                onPress={() => setNotificationBanner("Pickup time is approaching. This alert is simulated on this device.")}
-              >
+              <Btn kind="s" icon="bell" onPress={() => setNotificationBanner("Pickup time is approaching. This alert is simulated on this device.")}>
                 Test Pop-up Notification
               </Btn>
-              <Note>Simulated preferences only. No push notifications are sent.</Note>
+              <Note>Preferences on this phone only. SafeNest does not send push notifications yet.</Note>
               <SchoolPreferences title="School alerts" />
             </>
           ) : null}
-
-          {page === "family" ? (
-            <>
-              <SectionHeading title="Children" />
-              {children.map((childProfile) => (
-                <Card key={childProfile.id} tight>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12 }}>
-                    <Avatar name={childProfile.name} size={48} />
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <T s={1.05} w={800} lh={1.3}>{`${childProfile.name}, age ${childProfile.age}`}</T>
-                      <T s={0.86} c="muted">Class / Grade: {childProfile.className}</T>
-                    </View>
-                  </View>
-                  <Dl k="School" v={childProfile.schoolName} />
-                  <Dl k="School address" v={childProfile.schoolAddress} />
-                  <Dl k="Class / Grade" v={childProfile.className} />
-                  <Dl k="Classroom teacher" v={childProfile.teacherName} />
-                  <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 12, paddingVertical: 10, borderTopWidth: 1, borderTopColor: c.line }}>
-                    <View style={{ flexGrow: 1, flexShrink: 1, minWidth: 120 }}>
-                      <T s={0.95} c="muted">Teacher phone</T>
-                      <T s={0.95} w={700} tab>{childProfile.teacherPhone}</T>
-                    </View>
-                    <SmallBtn
-                      tone="on"
-                      icon="chat"
-                      onPress={() => void openTeacherWhatsApp(childProfile.teacherPhone)}
-                      label={`Message ${childProfile.teacherName} on WhatsApp`}
-                    >
-                      WhatsApp
-                    </SmallBtn>
-                  </View>
-                </Card>
-              ))}
-              <Btn kind="dash" icon="userplus" onPress={openChildModal}>Add child</Btn>
-              <Note>Demo only · Child profiles are kept in local screen state.</Note>
-
-              <SectionHeading title="Circle summary" />
-              <Card tight>
-                <Dl first k="Caregivers" v={String(mockData.caregivers.length)} />
-                <Dl k="Family members" v={String(familyMembers.length)} />
-                <Dl k="Approved pickup helpers" v={String(approvedHelpers)} />
-              </Card>
-            </>
-          ) : null}
-
-          {page === "security" ? (
-            <>
-              <Card tight>
-                <Press
-                  role="switch"
-                  label="Use a passkey"
-                  hint="Enable a simulated device login or recovery option."
-                  state={{ checked: passkeyEnabled }}
-                  scaleTo={0.985}
-                  onPress={() => setPasskeyEnabled((on) => !on)}
-                  style={{ flexDirection: "row", alignItems: "center", gap: 14, minHeight: 72, paddingVertical: 12 }}
-                >
-                  <SIc name="key" />
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <T w={700}>Use a passkey</T>
-                    <T s={0.84} c="muted" lh={1.35}>Use a device credential as an alternative login or recovery method.</T>
-                  </View>
-                  <Switch on={passkeyEnabled} />
-                </Press>
-              </Card>
-              <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10, marginHorizontal: 4 }}>
-                <Chip key={passkeyEnabled ? "on" : "off"} kind={passkeyEnabled ? "ok" : "plain"} icon={passkeyEnabled ? "check" : "lock"}>
-                  {passkeyEnabled ? "Passkey Active" : "Passkey not set up"}
-                </Chip>
-                {passkeyEnabled ? (
-                  <T s={0.88} c="muted">{passkeyMethods.find((method) => method.value === passkeyMethod)?.label} enabled</T>
-                ) : null}
-              </View>
-
-              <SectionHeading title="Device verification method" />
-              <Card tight style={{ paddingHorizontal: 4 }}>
-                {passkeyMethods.map((method, index) => (
-                  <MethodRow
-                    key={method.value}
-                    first={index === 0}
-                    icon={method.icon}
-                    label={method.label}
-                    on={passkeyMethod === method.value}
-                    disabled={!passkeyEnabled}
-                    onPress={() => setPasskeyMethod(method.value)}
-                  />
-                ))}
-              </Card>
-              {!passkeyEnabled ? <Note align="left">Turn on a passkey to choose a verification method.</Note> : null}
-              <Note>Demo only · No device biometrics or credentials are accessed or stored.</Note>
-            </>
-          ) : null}
-
           {page === "privacy" ? (
-            <>
-              <Card>
-                <View style={{ flexDirection: "row", gap: 14, alignItems: "flex-start" }}>
-                  <SIc name="lock" />
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <T w={700} lh={1.35}>Your data stays on this device</T>
-                    <View style={{ marginTop: 4 }}>
-                      <T s={0.92} c="muted" lh={1.45}>
-                        This app preview keeps account changes in local memory. Location and notification behavior is simulated; nothing is tracked or sent.
-                      </T>
-                    </View>
+            <Card>
+              <View style={{ flexDirection: "row", gap: 14, alignItems: "flex-start" }}>
+                <SIc name="lock" />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <T w={700} lh={1.35}>{demo ? "Demo Mode saves nothing" : "What SafeNest stores"}</T>
+                  <View style={{ marginTop: 4 }}>
+                    <T s={0.92} c="muted" lh={1.45}>
+                      {demo
+                        ? "Demo Mode uses made-up people. Nothing you do is saved or sent."
+                        : "Your profile, your household, your child's school details and your Trusted Circle are stored in your family's SafeNest account. Only members of your household can see them. Your profile photo stays on this phone. SafeNest does not store your password."}
+                    </T>
                   </View>
                 </View>
-              </Card>
-            </>
+              </View>
+            </Card>
           ) : null}
         </Page>
       )}
-
-      <AccountSheet
-        kind={modalKind}
-        draft={draft}
-        setDraft={updateDraft}
-        error={formError}
-        onClose={closeModal}
-        onSave={modalKind === "addAccount" ? addAccount : saveAccountEdit}
-        onPickPhoto={choosePhoto}
-      />
-
-      <ChildSheet
-        visible={modalKind === "addChild"}
-        draft={childDraft}
-        setDraft={updateChildDraft}
-        error={formError}
-        onClose={closeModal}
-        onSave={addChild}
-      />
-
-      <Sheet
-        visible={modalKind === "forgotPassword"}
-        onClose={closeModal}
-        title="Reset password"
-        closeLabel="Close reset password"
-        footer={<SheetFooter error={pinSent ? formError : ""}>{pinSent ? <Btn kind="p" icon="lock" onPress={resetPassword}>Reset password</Btn> : <Btn kind="p" icon="mail" onPress={sendResetPin}>Send demo PIN</Btn>}</SheetFooter>}
-      >
-        {!pinSent ? (
-          <>
-            <T c="muted" lh={1.4}>Choose where to send your simulated verification PIN.</T>
-            <Seg<"SMS" | "Email">
-              cur={resetChannel}
-              onPick={setResetChannel}
-              opts={[
-                { value: "SMS", label: "SMS", a11y: resetChannel === "SMS" ? "SMS, selected" : "SMS" },
-                { value: "Email", label: "Email", a11y: resetChannel === "Email" ? "Email, selected" : "Email" },
-              ]}
-            />
-            <Card tight>
-              <Dl first k={resetChannel === "SMS" ? "Phone" : "Email"} v={resetChannel === "SMS" ? activeAccount.phone : activeAccount.email} />
-            </Card>
-          </>
-        ) : (
-          <>
-            <T c="muted" lh={1.4}>
-              A demo PIN was sent to {resetChannel === "SMS" ? activeAccount.phone : activeAccount.email}. Use 123456 to continue.
-            </T>
-            <Field label="Verification PIN">
-              <Input accessibilityLabel="Verification PIN" keyboardType="number-pad" onChangeText={setPin} value={pin} />
-            </Field>
-            <Field label="New password">
-              <Input accessibilityLabel="New password" autoCapitalize="none" onChangeText={setNewPassword} secureTextEntry value={newPassword} />
-            </Field>
-            <Field label="Confirm new password">
-              <Input accessibilityLabel="Confirm new password" autoCapitalize="none" onChangeText={setConfirmPassword} secureTextEntry value={confirmPassword} />
-            </Field>
-          </>
-        )}
-        <Note>Demo only · No SMS or email is actually sent.</Note>
-      </Sheet>
     </AppShell>
   );
 }
@@ -1054,115 +485,3 @@ function MethodRow({ icon, label, on, disabled, first, onPress }: { icon: string
   );
 }
 
-/** Pinned sheet actions. A validation error sits right above Save, so it is visible without scrolling. */
-function SheetFooter({ error, children }: { error: string; children: ReactNode }) {
-  return (
-    <View style={{ gap: 10 }}>
-      {error ? <Rise key={error} kind="swap"><Err text={error} /></Rise> : null}
-      {children}
-    </View>
-  );
-}
-
-type AccountSheetProps = {
-  kind: ModalKind;
-  draft: AccountDraft;
-  setDraft: (key: keyof AccountDraft, value: string | null) => void;
-  error: string;
-  onClose: () => void;
-  onSave: () => void;
-  onPickPhoto: (target: PhotoTarget) => Promise<void>;
-};
-
-function AccountSheet({ kind, draft, setDraft, error, onClose, onSave, onPickPhoto }: AccountSheetProps) {
-  const visible = kind === "addAccount" || kind === "editAccount";
-  const isNewAccount = kind === "addAccount";
-  return (
-    <Sheet
-      visible={visible}
-      onClose={onClose}
-      title={isNewAccount ? "Add account" : "Edit account"}
-      closeLabel={`Close ${isNewAccount ? "add account" : "edit account"}`}
-      footer={<SheetFooter error={error}><Btn kind="p" icon="check" onPress={onSave}>{isNewAccount ? "Save and switch to account" : "Save account details"}</Btn></SheetFooter>}
-    >
-      <View style={{ alignItems: "center", gap: 10 }}>
-        {draft.photoUri ? (
-          <Image source={{ uri: draft.photoUri }} style={{ width: 80, height: 80, borderRadius: 40 }} accessibilityLabel="Profile photo preview" />
-        ) : (
-          <Avatar name={draft.name || "New account"} size={80} />
-        )}
-        <Btn kind="s" sm icon="camera" onPress={() => void onPickPhoto(isNewAccount ? "new" : "edit")}>Choose profile photo</Btn>
-      </View>
-      <Field label="Full name">
-        <Input accessibilityLabel="Full name" autoCapitalize="words" onChangeText={(value) => setDraft("name", value)} value={draft.name} />
-      </Field>
-      {isNewAccount ? (
-        <Field label="Password">
-          <Input accessibilityLabel="Password" autoCapitalize="none" onChangeText={(value) => setDraft("password", value)} secureTextEntry value={draft.password} />
-        </Field>
-      ) : null}
-      <Field label="Phone number">
-        <Input accessibilityLabel="Phone number" keyboardType="phone-pad" onChangeText={(value) => setDraft("phone", value)} value={draft.phone} />
-      </Field>
-      <Field label="Relationship">
-        <Input accessibilityLabel="Relationship to child" autoCapitalize="words" onChangeText={(value) => setDraft("role", value)} placeholder="Parent, Guardian, Helper..." value={draft.role} />
-      </Field>
-      <Field label="Email">
-        <Input accessibilityLabel="Email" autoCapitalize="none" keyboardType="email-address" onChangeText={(value) => setDraft("email", value)} value={draft.email} />
-      </Field>
-      <Note>Demo only · This account is stored in local screen state.</Note>
-    </Sheet>
-  );
-}
-
-type ChildSheetProps = {
-  visible: boolean;
-  draft: ChildDraft;
-  setDraft: (key: keyof ChildDraft, value: string) => void;
-  error: string;
-  onClose: () => void;
-  onSave: () => void;
-};
-
-function ChildSheet({ visible, draft, setDraft, error, onClose, onSave }: ChildSheetProps) {
-  return (
-    <Sheet
-      visible={visible}
-      onClose={onClose}
-      title="Add child"
-      closeLabel="Close add child"
-      footer={<SheetFooter error={error}><Btn kind="p" icon="check" onPress={onSave}>Save child</Btn></SheetFooter>}
-    >
-      <Field label="Full name">
-        <Input accessibilityLabel="Child's full name" autoCapitalize="words" onChangeText={(value) => setDraft("name", value)} value={draft.name} />
-      </Field>
-      <Field label="Age">
-        <Input accessibilityLabel="Child's age" keyboardType="number-pad" onChangeText={(value) => setDraft("age", value)} value={draft.age} />
-      </Field>
-      <Field label="School name">
-        <Input accessibilityLabel="School name" autoCapitalize="words" onChangeText={(value) => setDraft("schoolName", value)} value={draft.schoolName} />
-      </Field>
-      <Field label="School address">
-        <Input accessibilityLabel="School address" autoCapitalize="words" onChangeText={(value) => setDraft("schoolAddress", value)} value={draft.schoolAddress} multiline style={{ minHeight: 84, paddingTop: 14, textAlignVertical: "top" }} />
-      </Field>
-      <Field label="Class / Grade">
-        <Input accessibilityLabel="Class or grade" autoCapitalize="words" onChangeText={(value) => setDraft("className", value)} value={draft.className} />
-      </Field>
-      <Field label="Classroom teacher's name">
-        <Input accessibilityLabel="Classroom teacher's name" autoCapitalize="words" onChangeText={(value) => setDraft("teacherName", value)} value={draft.teacherName} />
-      </Field>
-      <Field label="Classroom teacher's phone number">
-        <Input accessibilityLabel="Classroom teacher's phone number" keyboardType="phone-pad" onChangeText={(value) => setDraft("teacherPhone", value)} placeholder="+60 12 345 6789" value={draft.teacherPhone} />
-      </Field>
-      <Note>Demo only · These child details stay in local screen state.</Note>
-    </Sheet>
-  );
-}
-
-function isValidEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
-}
-
-function isValidPhone(phone: string): boolean {
-  return phone.replace(/\D/g, "").length >= 9;
-}

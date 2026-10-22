@@ -105,23 +105,34 @@ function isValidCoordinate(coordinate: DeviceLocationCoordinate): boolean {
 }
 
 async function geocodeAddress(address: string): Promise<DeviceLocationCoordinate> {
+  let nativeGeocoderIssue: string | null = null;
   if (Platform.OS !== "web") {
-    const results = await Location.geocodeAsync(address);
-    const first = results[0];
-    if (!first) throw new Error("No coordinates were found for this address.");
-    const coordinate = { latitude: first.latitude, longitude: first.longitude };
-    if (!isValidCoordinate(coordinate)) throw new Error("The address returned invalid coordinates.");
-    return coordinate;
+    try {
+      const results = await Location.geocodeAsync(address);
+      const first = results[0];
+      if (first) {
+        const coordinate = { latitude: first.latitude, longitude: first.longitude };
+        if (!isValidCoordinate(coordinate)) throw new Error("The address returned invalid coordinates.");
+        return coordinate;
+      }
+      nativeGeocoderIssue = "The device geocoder returned no match.";
+    } catch (cause) {
+      nativeGeocoderIssue = cause instanceof Error ? cause.message : "The device geocoder failed.";
+    }
   }
 
   const response = await fetch(
     `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(address)}`,
     { headers: { Accept: "application/json" } },
   );
-  if (!response.ok) throw new Error(`Address lookup failed with status ${response.status}.`);
+  if (!response.ok) {
+    const fallbackIssue = `OpenStreetMap address lookup failed with status ${response.status}.`;
+    throw new Error([nativeGeocoderIssue, fallbackIssue, "Check the network connection or enter a more specific address."].filter(Boolean).join(" "));
+  }
   const payload: unknown = await response.json();
   if (!Array.isArray(payload) || !isRecord(payload[0])) {
-    throw new Error("No coordinates were found for this address.");
+    const reason = nativeGeocoderIssue ? `${nativeGeocoderIssue} ` : "";
+    throw new Error(`${reason}No coordinates were found for this address. Verify the full school address or choose its exact point on the map.`);
   }
   const coordinate = {
     latitude: Number(payload[0].lat),
@@ -278,6 +289,8 @@ function formatNavigationEta(seconds: number): string {
 export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLocationError }: DeviceLocationModalProps) {
   const {
     theme,
+    selectedCaregiver,
+    trustedHelpers,
     schoolLocation,
   } = useAppContext();
   const colors = theme.colors;
@@ -329,7 +342,21 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   routeOptionsRef.current = routeOptions;
   selectedRouteIdRef.current = selectedRouteId;
 
+<<<<<<< HEAD
   const screenPresented = visible;
+=======
+  const screenPresented = visible || autoPresented;
+  const mapPeople = [
+    ...mockData.familyMembers.map((person) => ({
+      id: person.id,
+      name: person.id === selectedCaregiver?.id ? selectedCaregiver.name : person.name,
+      kind: "family" as const,
+    })),
+    ...trustedHelpers
+      .filter((helper) => helper.state === "active")
+      .map((helper) => ({ id: helper.id, name: helper.name, kind: "helper" as const })),
+  ].filter((person, index, people) => people.findIndex((candidate) => candidate.id === person.id) === index);
+>>>>>>> 38f80718f8e3395c24e31a348696619834d576a6
   const currentCoordinates = parseCoordinates(currentLatitude, currentLongitude);
   const destinationCoordinates = parseCoordinates(destinationLatitude, destinationLongitude);
   const destinationPoint = destinationCoordinates.kind === "valid" ? destinationCoordinates.coordinate : null;
@@ -674,7 +701,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
         const reason = cause instanceof Error
           ? cause.message
           : "Unknown school geocoding error.";
-        const message = `Unable to locate ${mockData.school.name}. ${reason}`;
+        const message = `Unable to locate ${mockData.school.name}. ${reason} Verify the school's saved address, or tap its exact location on the map and search again.`;
         setRouteError(message);
         callbacks.current.onLocationError?.(new Error(message));
       }
@@ -976,6 +1003,49 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
               >
                 <Icon name="x" size={20} color={colors.ink} stroke={2} />
               </Press>
+            </View>
+          ) : null}
+          {!navigationActive ? (
+            <View
+              accessibilityLabel="Map legend for home, parents and helpers, university, and school"
+              style={{
+                position: "absolute", left: 10, right: 10, bottom: 10, zIndex: 9,
+                paddingHorizontal: 12, paddingVertical: 10, gap: 8, borderRadius: 16,
+                backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line,
+                elevation: 8,
+              }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 9, minHeight: 28 }}>
+                <MaterialCommunityIcons name="home-outline" size={20} color={colors.primaryInk} />
+                <T s={0.8} w={700}>home</T>
+              </View>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 9, minHeight: 30 }}>
+                <MaterialCommunityIcons name="account-multiple" size={20} color={colors.primaryInk} />
+                <T s={0.8} w={700}>parents and helpers</T>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  {mapPeople.map((person, index) => {
+                    const avatarColor = colors.avatars[index % colors.avatars.length] ?? colors.primary;
+                    return (
+                      <View
+                        key={person.id}
+                        accessibilityLabel={`${person.name}, ${person.kind === "helper" ? "trusted helper" : "family member"}`}
+                        style={{ width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: avatarColor }}
+                      >
+                        <T s={0.68} w={800} c="#FFFFFF">{person.name.trim().charAt(0).toUpperCase()}</T>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 9, minHeight: 28 }}>
+                <MaterialCommunityIcons name="school-outline" size={20} color={colors.primaryInk} />
+                <T s={0.8} w={700}>university</T>
+              </View>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 9, minHeight: 28 }}>
+                <MaterialCommunityIcons name="domain" size={20} color={colors.danger} />
+                <T s={0.8} w={700}>school</T>
+              </View>
+              <T s={0.66} c="muted">Family icons show profiles; live locations are not available for family members.</T>
             </View>
           ) : null}
           {navigationActive && Platform.OS !== "web" ? (

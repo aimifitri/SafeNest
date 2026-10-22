@@ -26,6 +26,8 @@ import {
 } from "./theme";
 
 import { useAuth } from "./AuthContext";
+import { useHousehold } from "./HouseholdContext";
+import { fetchPlan, savePlanDay } from "./householdApi";
 import {
   cancelRequest,
   completeRequest,
@@ -74,6 +76,10 @@ interface AppContextValue {
 
   // Regular Monday-Friday dismissal schedule.
   weeklySchedule: WeekdayTimes;
+
+  // false for a real account until at least one weekday is saved. Demo Mode counts as set up.
+  planConfigured: boolean;
+  planError: string | null;
 
   // Update only one day for the current child.
   updateWeekdayTime: (
@@ -144,11 +150,44 @@ export function AppProvider({
   const [fontStyle, setFontStyle] =
     useState<FontStyle>(DEFAULT_FONT_STYLE);
 
-  // Initial schedule comes from existing mock data.
+  const household = useHousehold();
+  const hhChildId = household.child?.id ?? null;
+
+  // Demo Mode starts from the sample schedule. A real account starts from a neutral default until its own plan is
+  // loaded from Supabase (public.pickup_plans); planConfigured says whether the parent has saved one.
   const [weeklySchedule, setWeeklySchedule] =
     useState<WeekdayTimes>(() => ({
       ...mockData.schedule.weekdayTimes,
     }));
+  const [planConfigured, setPlanConfigured] = useState(true);
+  const [planError, setPlanError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPlanError(null);
+    if (household.demo) {
+      setWeeklySchedule({ ...mockData.schedule.weekdayTimes });
+      setPlanConfigured(true);
+      return;
+    }
+    const base: WeekdayTimes = { 1: "1:00 PM", 2: "1:00 PM", 3: "1:00 PM", 4: "1:00 PM", 5: "1:00 PM" };
+    setWeeklySchedule(base);
+    setPlanConfigured(false);
+    if (!hhChildId) return;
+    let active = true;
+    void fetchPlan(hhChildId).then((res) => {
+      if (!active) return;
+      if (!res.ok) {
+        setPlanError(res.error);
+        return;
+      }
+      const saved = res.data;
+      setWeeklySchedule({ ...base, ...Object.fromEntries(Object.entries(saved).filter(([k]) => Number(k) >= 1 && Number(k) <= 5)) } as WeekdayTimes);
+      setPlanConfigured(Object.keys(saved).length > 0);
+    });
+    return () => {
+      active = false;
+    };
+  }, [household.demo, hhChildId]);
 
   // Save one weekday without changing other days.
   const updateWeekdayTime = (
@@ -156,8 +195,9 @@ export function AppProvider({
     weekday: Weekday,
     time: string
   ) => {
-    // Single-child prototype: only Laila is supported.
-    if (childId !== mockData.child.id) {
+    // Only the child SafeNest is currently about can be changed.
+    const currentChildId = household.demo ? mockData.child.id : hhChildId;
+    if (!currentChildId || childId !== currentChildId) {
       return;
     }
 
@@ -181,10 +221,24 @@ export function AppProvider({
       return;
     }
 
+    const previous = weeklySchedule[weekday];
     setWeeklySchedule((current) => ({
       ...current,
       [weekday]: normalizedTime,
     }));
+    if (household.demo) return;
+    // A real account: save it, and put the old time back if the save fails so the screen never lies.
+    const fid = household.familyId;
+    if (!fid) return;
+    setPlanError(null);
+    void savePlanDay(fid, currentChildId, weekday, normalizedTime).then((res) => {
+      if (res.ok) {
+        setPlanConfigured(true);
+      } else {
+        setPlanError(res.error);
+        setWeeklySchedule((current) => ({ ...current, [weekday]: previous }));
+      }
+    });
   };
 
   const [
@@ -221,7 +275,7 @@ export function AppProvider({
     return () => {
       active = false;
     };
-  }, [familyId, userId]);
+  }, [familyId, userId, household.version]);
 
   const refreshBackup = useCallback(async () => {
     if (!dbChildId) return;
@@ -306,12 +360,11 @@ export function AppProvider({
     return runLive(() => completeRequest(current.id as string));
   };
 
-  const [trustedHelpers, setTrustedHelpers] =
-    useState<TrustedHelper[]>(() =>
-      mockData.trustedHelpers.map((helper) => ({
-        ...helper,
-      }))
-    );
+  // Trusted Circle helpers come from the household: sample people in Demo Mode, stored people for a real account.
+  const trustedHelpers = useMemo<TrustedHelper[]>(
+    () => household.helpers.map((h) => ({ id: h.id, name: h.name, role: h.role, state: h.state })),
+    [household.helpers],
+  );
 
   const resolvedTheme =
     themeMode === "system"
@@ -348,6 +401,8 @@ export function AppProvider({
 
       // Shared weekly schedule.
       weeklySchedule,
+      planConfigured,
+      planError,
       updateWeekdayTime,
 
       // Existing temporary override.
@@ -374,14 +429,9 @@ export function AppProvider({
 
       // Existing trusted helper behaviour.
       trustedHelpers,
-      setTrustedHelperState: (helperId, state) =>
-        setTrustedHelpers((current) =>
-          current.map((helper) =>
-            helper.id === helperId
-              ? { ...helper, state }
-              : helper
-          )
-        ),
+      setTrustedHelperState: (helperId, state) => {
+        void household.setHelperState(helperId, state);
+      },
 
       theme,
     }),
@@ -391,6 +441,9 @@ export function AppProvider({
       textScale,
       fontStyle,
       weeklySchedule,
+      planConfigured,
+      planError,
+      household.demo,
       temporaryDismissal,
       backupRequest,
       backupBusy,
