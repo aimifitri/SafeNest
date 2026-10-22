@@ -103,23 +103,34 @@ function isValidCoordinate(coordinate: DeviceLocationCoordinate): boolean {
 }
 
 async function geocodeAddress(address: string): Promise<DeviceLocationCoordinate> {
+  let nativeGeocoderIssue: string | null = null;
   if (Platform.OS !== "web") {
-    const results = await Location.geocodeAsync(address);
-    const first = results[0];
-    if (!first) throw new Error("No coordinates were found for this address.");
-    const coordinate = { latitude: first.latitude, longitude: first.longitude };
-    if (!isValidCoordinate(coordinate)) throw new Error("The address returned invalid coordinates.");
-    return coordinate;
+    try {
+      const results = await Location.geocodeAsync(address);
+      const first = results[0];
+      if (first) {
+        const coordinate = { latitude: first.latitude, longitude: first.longitude };
+        if (!isValidCoordinate(coordinate)) throw new Error("The address returned invalid coordinates.");
+        return coordinate;
+      }
+      nativeGeocoderIssue = "The device geocoder returned no match.";
+    } catch (cause) {
+      nativeGeocoderIssue = cause instanceof Error ? cause.message : "The device geocoder failed.";
+    }
   }
 
   const response = await fetch(
     `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(address)}`,
     { headers: { Accept: "application/json" } },
   );
-  if (!response.ok) throw new Error(`Address lookup failed with status ${response.status}.`);
+  if (!response.ok) {
+    const fallbackIssue = `OpenStreetMap address lookup failed with status ${response.status}.`;
+    throw new Error([nativeGeocoderIssue, fallbackIssue, "Check the network connection or enter a more specific address."].filter(Boolean).join(" "));
+  }
   const payload: unknown = await response.json();
   if (!Array.isArray(payload) || !isRecord(payload[0])) {
-    throw new Error("No coordinates were found for this address.");
+    const reason = nativeGeocoderIssue ? `${nativeGeocoderIssue} ` : "";
+    throw new Error(`${reason}No coordinates were found for this address. Verify the full school address or choose its exact point on the map.`);
   }
   const coordinate = {
     latitude: Number(payload[0].lat),
@@ -710,7 +721,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
         const reason = cause instanceof Error
           ? cause.message
           : "Unknown school geocoding error.";
-        const message = `Unable to locate ${mockData.school.name}. ${reason}`;
+        const message = `Unable to locate ${mockData.school.name}. ${reason} Verify the school's saved address, or tap its exact location on the map and search again.`;
         setRouteError(message);
         callbacks.current.onLocationError?.(new Error(message));
       }
