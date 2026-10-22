@@ -3,7 +3,7 @@ import { Linking, Share, View } from "react-native";
 
 import { Avatar } from "../shared/Avatar";
 import { clock } from "../shared/circleEngine";
-import { mockData } from "../shared/mockData";
+import { useChildSchool } from "../shared/HouseholdContext";
 import { Sheet } from "../shared/Sheet";
 import { isLongWait, photoMessage, teacherMessage, whatsappUrl } from "../shared/teacherMessages";
 import type { MsgLang } from "../shared/teacherMessages";
@@ -27,7 +27,7 @@ function MessageBox({ text }: { text: string }) {
 
 function SendButtons({ text, onSent, simulated }: { text: string; onSent: () => void; simulated: boolean }) {
   const [error, setError] = useState("");
-  const { school } = mockData;
+  const { school } = useChildSchool();
   const url = whatsappUrl(school.teacherPhone, text);
   const openWhatsApp = async () => {
     setError("");
@@ -65,7 +65,7 @@ export function TeacherPhotoSheet(props: {
   visible: boolean; onClose: () => void; onSent: () => void; simulated: boolean;
   collector: string; collectorRole: string; dismiss: number;
 }) {
-  const { child, school } = mockData;
+  const { child, school } = useChildSchool();
   const [lang, setLang] = useState<MsgLang>("ms");
   const text = photoMessage(lang, { teacher: school.teacher, child: child.name, className: child.className, collector: props.collector, collectorRole: props.collectorRole, dismiss: props.dismiss });
   return (
@@ -90,7 +90,7 @@ export function TeacherLateSheet(props: {
   visible: boolean; onClose: () => void; onSent: () => void; simulated: boolean;
   dismiss: number; leaveAt: number; travelMin: number | null;
 }) {
-  const { child, school } = mockData;
+  const { child, school } = useChildSchool();
   const [lang, setLang] = useState<MsgLang>("ms");
   const arrival = props.travelMin === null ? null : props.leaveAt + props.travelMin;
   const text = teacherMessage(lang, { teacher: school.teacher, child: child.name, className: child.className, dismiss: props.dismiss, leaveAt: props.leaveAt, arrival });
@@ -111,7 +111,7 @@ export function LeaveSheet(props: {
   onConfirm: (leaveAt: number) => void; onAskAgain: () => void;
 }) {
   const c = useColors();
-  const { child, school } = mockData;
+  const { child, school } = useChildSchool();
   const [leaveAt, setLeaveAt] = useState(props.nowMin);
   const [seen, setSeen] = useState(false);
   if (props.visible && !seen) { setSeen(true); setLeaveAt(props.nowMin); }

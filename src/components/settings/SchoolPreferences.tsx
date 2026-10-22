@@ -3,7 +3,7 @@ import { View } from "react-native";
 
 import { Card } from "../shared/Card";
 import { SectionHeading } from "../shared/SectionHeading";
-import { mockData } from "../shared/mockData";
+import { useChildSchool } from "../shared/HouseholdContext";
 import { Press, SIc, Switch, T, useColors } from "../shared/ui";
 
 const preferenceOptions = [
@@ -16,7 +16,7 @@ const preferenceOptions = [
   {
     key: "gate",
     label: "Gate status",
-    description: `When ${mockData.child.name} is released for pickup.`,
+    description: "When your child is released for pickup.",
     icon: "school",
   },
   {

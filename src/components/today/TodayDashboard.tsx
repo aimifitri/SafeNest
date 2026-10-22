@@ -11,7 +11,10 @@ import { clock } from "../shared/circleEngine";
 import { sim } from "../shared/demoSim";
 import type { MapDot } from "../shared/MapView";
 import { MapView } from "../shared/MapView";
-import { mockData } from "../shared/mockData";
+import { useAuth } from "../shared/AuthContext";
+import { useChildSchool } from "../shared/HouseholdContext";
+import { EmptyState } from "../shared/forms";
+import { NextStepCard, SetupChecklist, useSetupActions } from "../onboarding/SetupChecklist";
 import { Banner, Btn, Glass, Press, Rise, SIc, T, useColors } from "../shared/ui";
 import { HelperAssignments } from "./HelperAssignments";
 import { PickupBanner, usePickupBanner } from "./PickupBanner";
@@ -38,8 +41,11 @@ export function TodayDashboard() {
   const { theme, selectedCaregiver, trustedHelpers } = useAppContext();
   const pf = usePickupFlow();
   const { flow, collector, dismissal } = pf;
-  const { child, school, familyMembers } = mockData;
-  const caregiver = selectedCaregiver?.name ?? "Abu";
+  const { child, school, hasChild, household } = useChildSchool();
+  const { profile } = useAuth();
+  const goSetup = useSetupActions();
+  const familyMembers = household.members.map((m) => ({ id: m.userId, name: m.name }));
+  const caregiver = selectedCaregiver?.name ?? "";
   const hour = pf.simActive ? Math.floor(pf.nowMin / 60) : new Date().getHours();
   const greeting = hour < 12 ? "Good morning," : hour < 17 ? "Good afternoon," : "Good evening,";
   const [demoOpen, setDemoOpen] = useState(false);
@@ -68,6 +74,34 @@ export function TodayDashboard() {
   });
   const banner = usePickupBanner({ phase: flow.phase, collector: collector.name, childName: child.name, simulated: pf.simActive, whenLabel: `Picked up at ${clock(pf.nowMin)}` });
   const mapNote = flow.phase === "travelling" && pf.simActive ? "Simulated movement" : "Simulated map";
+
+  // A real account with no child yet: no map, no sample people. Say what is missing and offer the next step.
+  if (!hasChild && !household.demo) {
+    const helper = profile?.accountType === "helper";
+    return (
+      <AppShell title="SafeNest" badge="Today" activeTab="home">
+        <HelperAssignments />
+        {household.error ? <Banner>{household.error}</Banner> : null}
+        {!household.ready ? (
+          <T c="muted">Loading...</T>
+        ) : helper ? (
+          <>
+            <EmptyState icon="today" title="Nothing to collect right now" body="When a parent asks you to collect their child, the request shows up here. Set when you are available so you are only asked at good times.">
+              <Btn onPress={() => goSetup("availability")} label="Set my availability">Set my availability</Btn>
+            </EmptyState>
+            <SetupChecklist title="Your setup" />
+          </>
+        ) : (
+          <>
+            <EmptyState icon="school" title="Add your first child" body="SafeNest plans school pickups around your child's school and finish time. Nothing is shown until you add them.">
+              <Btn onPress={() => goSetup("child")} icon="plus" label="Add your first child">Add your first child</Btn>
+            </EmptyState>
+            <SetupChecklist />
+          </>
+        )}
+      </AppShell>
+    );
+  }
 
   return (
     <View style={{ flex: 1 }}>
@@ -107,6 +141,8 @@ export function TodayDashboard() {
       ) : null}
 
       <PickupStatusCard pf={pf} childName={child.name} />
+
+      <NextStepCard />
 
       <Rise i={2}>
         <Card tight>
