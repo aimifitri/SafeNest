@@ -407,6 +407,12 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   }, [screenPresented]);
 
   useEffect(() => {
+    if (!visible) return;
+    setEstimateOpen(true);
+    setBackupNotice("");
+  }, [visible]);
+
+  useEffect(() => {
     const checkPickupTime = () => {
       const now = new Date();
       const day = now.getDay();
@@ -987,45 +993,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
               </T>
             </View>
           </View>
-        ) : (
-          <View style={{ minHeight: 72, paddingHorizontal: 10, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 6 }}>
-            <Input
-              accessibilityLabel="Starting point"
-              value={startText}
-              onFocus={() => setActiveSearch("start")}
-              onChangeText={(value) => editPlaceText("start", value)}
-              placeholder="Current location"
-              returnKeyType="search"
-              onSubmitEditing={() => void searchAndEstimate()}
-              style={{ flex: 1, minWidth: 0, width: 0, minHeight: 48, paddingHorizontal: 9, borderRadius: 12, fontSize: 14 }}
-            />
-            <Input
-              accessibilityLabel="Destination"
-              value={destinationText}
-              onFocus={() => setActiveSearch("destination")}
-              onChangeText={(value) => editPlaceText("destination", value)}
-              placeholder="Destination"
-              returnKeyType="search"
-              onSubmitEditing={() => void searchAndEstimate()}
-              style={{ flex: 1, minWidth: 0, width: 0, minHeight: 48, paddingHorizontal: 9, borderRadius: 12, fontSize: 14 }}
-            />
-            <Press
-              onPress={() => void searchAndEstimate()}
-              label="Search route and show pickup estimate"
-              disabled={routeLoading}
-              style={{ width: 44, height: 48, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: colors.primary }}
-            >
-              <MaterialCommunityIcons name="magnify" size={24} color={colors.onPrimary} />
-            </Press>
-            <Press
-              onPress={closeScreen}
-              label="Close route planner"
-              style={{ width: 36, height: 48, alignItems: "center", justifyContent: "center" }}
-            >
-              <Icon name="x" size={20} color={colors.ink} stroke={2} />
-            </Press>
-          </View>
-        )}
+        ) : null}
 
         <View style={{ flex: 1, minHeight: 240, marginHorizontal: navigationActive ? 0 : 12, marginBottom: navigationActive ? 0 : 8, borderRadius: navigationActive ? 0 : 18, overflow: "hidden", backgroundColor: colors.map }}>
           {currentPoint || destinationPoint ? (
@@ -1049,6 +1017,50 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
               </T>
             </View>
           )}
+          {!navigationActive ? (
+            <View style={{
+              position: "absolute", top: 12, left: 10, right: 10, zIndex: 10,
+              minHeight: 66, paddingHorizontal: 8, paddingVertical: 8, flexDirection: "row",
+              alignItems: "center", gap: 6, borderRadius: 16, backgroundColor: colors.card,
+              borderWidth: 1, borderColor: colors.line, elevation: 8,
+            }}>
+              <Input
+                accessibilityLabel="Starting point"
+                value={startText}
+                onFocus={() => setActiveSearch("start")}
+                onChangeText={(value) => editPlaceText("start", value)}
+                placeholder="Current location"
+                returnKeyType="search"
+                onSubmitEditing={() => void searchAndEstimate()}
+                style={{ flex: 1, minWidth: 0, width: 0, minHeight: 46, paddingHorizontal: 9, borderRadius: 12, fontSize: 14 }}
+              />
+              <Input
+                accessibilityLabel="Destination"
+                value={destinationText}
+                onFocus={() => setActiveSearch("destination")}
+                onChangeText={(value) => editPlaceText("destination", value)}
+                placeholder="Destination"
+                returnKeyType="search"
+                onSubmitEditing={() => void searchAndEstimate()}
+                style={{ flex: 1, minWidth: 0, width: 0, minHeight: 46, paddingHorizontal: 9, borderRadius: 12, fontSize: 14 }}
+              />
+              <Press
+                onPress={() => void searchAndEstimate()}
+                label="Search route and show pickup estimate"
+                disabled={routeLoading}
+                style={{ width: 42, height: 46, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: colors.primary }}
+              >
+                <MaterialCommunityIcons name="magnify" size={24} color={colors.onPrimary} />
+              </Press>
+              <Press
+                onPress={closeScreen}
+                label="Close route planner"
+                style={{ width: 34, height: 46, alignItems: "center", justifyContent: "center" }}
+              >
+                <Icon name="x" size={20} color={colors.ink} stroke={2} />
+              </Press>
+            </View>
+          ) : null}
           {navigationActive && Platform.OS !== "web" ? (
             <View pointerEvents="none" style={{ position: "absolute", left: "50%", top: "50%", width: 42, height: 42, marginLeft: -21, marginTop: -21, borderRadius: 21, alignItems: "center", justifyContent: "center", backgroundColor: colors.primary, borderWidth: 3, borderColor: colors.card, elevation: 5 }}>
               <MaterialCommunityIcons name="car" size={23} color={colors.onPrimary} />
