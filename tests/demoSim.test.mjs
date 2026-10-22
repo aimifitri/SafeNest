@@ -19,7 +19,7 @@ fs.writeFileSync(path.join(dir, "node_modules/react/index.js"), "export const us
 fs.writeFileSync(path.join(dir, "node_modules/react/package.json"), '{"name":"react","type":"module","main":"index.js"}');
 const out = path.join(dir, "bundle.mjs");
 await build({
-  stdin: { contents: `export * from "${root}/src/components/shared/demoSim.ts"; export * as F from "${root}/src/components/shared/pickupFlow.ts"; export * as E from "${root}/src/components/shared/circleEngine.ts"; export * as TC from "${root}/src/components/shared/teacherCheck.ts";`, resolveDir: root, loader: "ts" },
+  stdin: { contents: `export * from "./src/components/shared/demoSim.ts"; export * as F from "./src/components/shared/pickupFlow.ts"; export * as E from "./src/components/shared/circleEngine.ts"; export * as TC from "./src/components/shared/teacherCheck.ts";`, resolveDir: root, loader: "ts" },
   bundle: true, format: "esm", platform: "node", outfile: out, logLevel: "silent",
   alias: { react: path.join(dir, "node_modules/react/index.js") },
 });

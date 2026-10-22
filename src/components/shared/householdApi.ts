@@ -141,37 +141,25 @@ export async function fetchHelpers(familyId: string): Promise<ApiResult<HHelper[
 
 /** Always creates a pending entry. Approval is a separate step that only a family admin can do (RLS). */
 export async function addHelper(familyId: string, d: { name: string; relationship: string; phone: string }): Promise<ApiResult<string>> {
-  const res = await call<{ id: string }>(() =>
-    supabase.from("trusted_helpers").insert({ family_id: familyId, name: d.name.trim(), role: d.relationship.trim(), phone: d.phone.trim() || null, state: "pending" }).select("id").single(),
-  );
-  return res.ok && res.data ? { ok: true, data: res.data.id } : { ok: false, error: res.ok ? "Could not add this helper." : res.error };
+  return { ok: false, error: "Use Circle > Real account: Join Circle for secure invitations and explicit approval. Legacy helper edits, rejection and removal are not supported." };
 }
 
 export async function setHelperState(helperId: string, state: ContactState): Promise<ApiResult<null>> {
-  const res = await call<unknown>(() => supabase.from("trusted_helpers").update({ state }).eq("id", helperId).select("id"));
-  if (!res.ok) return res;
-  return Array.isArray(res.data) && res.data.length > 0 ? { ok: true, data: null } : { ok: false, error: "Only a family admin can approve or decline helpers." };
+  return { ok: false, error: "Use Circle > Real account: Join Circle for secure invitations and explicit approval. Legacy helper edits, rejection and removal are not supported." };
 }
 
 export async function removeHelper(helperId: string): Promise<ApiResult<null>> {
-  const res = await call<unknown>(() => supabase.from("trusted_helpers").delete().eq("id", helperId).select("id"));
-  if (!res.ok) return res;
-  return Array.isArray(res.data) && res.data.length > 0 ? { ok: true, data: null } : { ok: false, error: "Only a family admin can remove helpers." };
+  return { ok: false, error: "Use Circle > Real account: Join Circle for secure invitations and explicit approval. Legacy helper edits, rejection and removal are not supported." };
 }
 
 /** Existing RPC from schema.sql. Returns a one-time code the helper types in after they sign up. No email is sent. */
 export async function createHelperInvite(helperId: string): Promise<ApiResult<string>> {
-  if (!isUuid(helperId)) return { ok: false, error: "Save this helper first." };
-  const res = await call<string>(() => supabase.rpc("create_helper_invite", { target_helper: helperId }));
-  return res.ok && res.data ? { ok: true, data: res.data } : { ok: false, error: res.ok ? "Could not create a code." : res.error };
+  return { ok: false, error: "Use Circle > Real account: Join Circle for secure invitations and explicit approval. Legacy helper edits, rejection and removal are not supported." };
 }
 
 /** Existing RPC from schema.sql. Links the signed-in account to the helper entry the code belongs to. */
 export async function acceptHelperInvite(code: string): Promise<ApiResult<string>> {
-  const token = code.trim();
-  if (token.length < 16) return { ok: false, error: "That code is too short. Paste the whole code." };
-  const res = await run<string>(() => supabase.rpc("accept_helper_invite", { invite_token: token }));
-  return res.ok && res.data ? { ok: true, data: res.data } : { ok: false, error: res.ok ? "Could not use this code." : res.error };
+  return { ok: false, error: "Use Circle > Real account: Join Circle for secure invitations and explicit approval. Legacy helper edits, rejection and removal are not supported." };
 }
 
 // ---------------------------------------------------------------- family roster and family invitations
