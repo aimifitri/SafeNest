@@ -1,4 +1,5 @@
 import { supabase } from "../../lib/supabase";
+import { uniqueChannelName } from "./realtimeChannel";
 import { call } from "./backupApi";
 import type { ApiResult } from "./backupApi";
 
@@ -73,7 +74,7 @@ export async function fetchMyJourneys(): Promise<ApiResult<MyJourney[]>> {
 
 export function subscribeToJourneys(key: string, onChange: () => void): () => void {
   const channel = supabase
-    .channel(`pickup-journeys-${key}`)
+    .channel(uniqueChannelName(`pickup-journeys-${key}`))
     .on("postgres_changes", { event: "*", schema: "public", table: "pickup_journeys" }, () => onChange())
     .subscribe();
   return () => {
