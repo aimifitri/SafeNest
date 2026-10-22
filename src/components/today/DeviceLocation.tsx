@@ -1,7 +1,7 @@
 import type { LocationObject, LocationSubscription } from "expo-location";
 import * as Location from "expo-location";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppState, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, View } from "react-native";
+import { AppState, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, View } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -801,6 +801,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     : navigationProgress?.remainingMeters ?? 0;
 
   const startNavigation = async () => {
+    Keyboard.dismiss();
     if (previewOnly || !routeReady || !destinationPoint || routeLoading || busy) return;
     setRouteError("");
     if (tracking && location) {
@@ -837,6 +838,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   };
 
   const choosePlace = (target: SearchTarget, place: (typeof DEMO_PLACES)[number]) => {
+    Keyboard.dismiss();
     clearRoutePlan();
     const { latitude, longitude } = place.coordinate;
     if (target === "start") {
@@ -874,6 +876,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   };
 
   const searchAndEstimate = async () => {
+    Keyboard.dismiss();
     setEstimateOpen(true);
     setBackupNotice("");
     setRouteError("");
@@ -921,6 +924,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   };
 
   const closeScreen = () => {
+    Keyboard.dismiss();
     closeEstimate();
     stopNavigation();
     onClose();
@@ -1089,6 +1093,10 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
             keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
             contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: Math.max(insets.bottom, 18), gap: 12 }}
           >
+            <NavigationSearch devicePoint={devicePoint} onRequestGPS={() => void startTracking()} onChange={applyNavigationSelection} />
+            {previewOnly ? <T s={0.78} c="muted">Walking and cycling show a direct connection preview only. Road directions and ETA below are driving estimates; switch to Driving to start navigation.</T> : null}
+            {location ? <T s={0.76} c="muted">Accuracy: {location.coords.accuracy === null ? "Unknown" : `${Math.round(location.coords.accuracy)} m`} ? Updated {new Date(location.timestamp).toLocaleTimeString()} ? {tracking ? "Live" : "Stopped"}</T> : null}
+            <Btn kind="o" onPress={() => tracking ? stopNavigation() : void startTracking()} disabled={busy}>{tracking ? "Stop GPS" : busy ? "Getting location..." : "Use my location"}</Btn>
             {activeSearch ? (
               <View style={{ borderRadius: 14, overflow: "hidden", borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card }}>
                 {destinationSuggestions.length > 0 ? destinationSuggestions.map((place) => (
