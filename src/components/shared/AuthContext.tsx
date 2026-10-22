@@ -17,6 +17,7 @@ type AuthContextValue = {
   loading: boolean;
   caregiver: Caregiver | null;
   familyId: string | null;
+  childId: string | null;
   accountError: string | null;
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
   signUp: (
@@ -73,9 +74,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [loading, setLoading] = useState(true);
   const [caregiver, setCaregiver] = useState<Caregiver | null>(null);
   const [familyId, setFamilyId] = useState<string | null>(null);
+  const [childId, setChildId] = useState<string | null>(null);
   const [accountError, setAccountError] = useState<string | null>(null);
   const [retryVersion, setRetryVersion] = useState(0);
   const familyCreationInProgress = useRef(new Map<string, Promise<void>>());
+  const childCreationInProgress = useRef(new Map<string, Promise<string>>());
 
   useEffect(() => {
     const {
@@ -107,6 +110,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     if (!userId || !session) {
       setCaregiver(null);
       setFamilyId(null);
+      setChildId(null);
       setAccountError(null);
       return () => {
         active = false;
@@ -115,6 +119,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     setCaregiver(null);
     setFamilyId(null);
+    setChildId(null);
     setAccountError(null);
 
     const loadAccount = async () => {
@@ -179,6 +184,40 @@ export function AuthProvider({ children }: PropsWithChildren) {
         }
 
         if (active) {
+          setFamilyId(membership.family_id);
+        }
+
+        let childCreation = childCreationInProgress.current.get(membership.family_id);
+        if (!childCreation) {
+          const pendingCreation = (async () => {
+            const { data, error } = await supabase.rpc("ensure_child", {
+              fid: membership.family_id,
+            });
+            if (error) throw error;
+            if (typeof data !== "string" || !data) {
+              throw new Error("ensure_child returned no child id");
+            }
+            return data;
+          })();
+          childCreationInProgress.current.set(membership.family_id, pendingCreation);
+          childCreation = pendingCreation;
+        }
+
+        let ensuredChildId: string;
+        try {
+          ensuredChildId = await childCreation;
+        } catch {
+          if (active) {
+            setAccountError("We couldn't load your child. Please try again.");
+          }
+          return;
+        } finally {
+          if (childCreationInProgress.current.get(membership.family_id) === childCreation) {
+            childCreationInProgress.current.delete(membership.family_id);
+          }
+        }
+
+        if (active) {
           const email = profile.email ?? session.user.email ?? "";
           setCaregiver({
             id: userId,
@@ -188,7 +227,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
             phone: profile.phone ?? "",
             isAdmin: membership.role === "admin",
           });
-          setFamilyId(membership.family_id);
+          setChildId(ensuredChildId);
         }
       } catch {
         if (active) {
@@ -235,6 +274,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       setSession(null);
       setCaregiver(null);
       setFamilyId(null);
+      setChildId(null);
       setAccountError(null);
     }
   }, []);
@@ -250,6 +290,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         loading,
         caregiver,
         familyId,
+        childId,
         accountError,
         signIn,
         signUp,
