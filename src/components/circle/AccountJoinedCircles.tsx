@@ -24,7 +24,7 @@ export function AccountJoinedCircles() {
 
   return (
     <>
-      <Banner>These joined circles belong to your signed-in account. Membership status alone does not grant pickup permission. Invitations, approvals and leaving are not connected here yet.</Banner>
+      <Banner>These joined circles belong to your signed-in account. Membership status alone does not grant pickup permission. Use the Real account panel to request membership or approve helpers. Refresh here after changes. Leaving is not available yet.</Banner>
       {!signedIn ? <Card><T>Sign in to view your joined circles.</T></Card> : <>
         <Btn kind="o" onPress={refresh} disabled={loading} label={error ? "Retry loading joined circles" : "Refresh joined circles"}>
           {error ? "Try again" : "Refresh"}

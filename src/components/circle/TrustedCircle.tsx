@@ -19,6 +19,7 @@ import { Banner, Btn, Chip, Err, Field, Input, Lead, Seg, SmallBtn, Press, Rise,
 import type { FamilyMember, TrustedHelper } from "../shared/types";
 import { InvitationSheet } from "./InvitationSheet";
 import { JoinedCircles } from "./JoinedCircles";
+import { RealCircleInvitations } from "./RealCircleInvitations";
 import { AccountJoinedCircles } from "./AccountJoinedCircles";
 import { canManageDemoInvitations, circleDemoReducer, createCircleDemoState, DEMO_PERSONAS } from "./circleDemo";
 import type { DemoActor } from "./circleDemo";
@@ -243,6 +244,7 @@ function CircleDemoScreen() {
   return (
     <AppShell title="Trusted Circle" badge="Circle" activeTab="circle">
       <Banner>Joined Circles includes memberships from your signed-in account. My Circle and all fictional persona, invitation, approval, leave, availability and pickup controls remain Demo data. Demo actions do not change your account.</Banner>
+      <RealCircleInvitations />
       <SectionHeading title="Fictional demo persona" />
       <Seg<DemoActor["id"]>
         cur={personaId}
