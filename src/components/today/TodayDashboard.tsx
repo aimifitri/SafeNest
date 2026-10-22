@@ -44,7 +44,7 @@ export function TodayDashboard() {
   const greeting = hour < 12 ? "Good morning," : hour < 17 ? "Good afternoon," : "Good evening,";
   const [demoOpen, setDemoOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
-  const [locationOpen, setLocationOpen] = useState(false);
+  const [locationOpen, setLocationOpen] = useState(true);
   const readyHelpers = trustedHelpers.filter((helper) => helper.state === "active").length;
 
   // Map dots (simulated map). The collector's dot follows the phase. In the demo a backup collector's marker moves
