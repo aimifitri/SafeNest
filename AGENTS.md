@@ -2,7 +2,7 @@
 
 ## 1. Project purpose
 
-SafeNest is a family pickup coordination app. Its frontend demonstrates pickup monitoring, trusted family members and helpers, pickup planning, late-pickup handling, backup arrangements, and school pickup verification. Treat the latest HTML file in `design_reference/` as the single source of truth for frontend design and prototype behavior.
+SafeNest is a family pickup coordination app. Its frontend supports pickup monitoring, trusted family members and helpers, pickup planning, late-pickup handling, backup arrangements, and school pickup verification. The current implemented app design and approved improvements are the design baseline. Files in `design_reference/` provide historical context and ideas; they are not a strict specification.
 
 ## 2. Technology
 
@@ -11,19 +11,21 @@ SafeNest is a family pickup coordination app. Its frontend demonstrates pickup m
 - Use the styling approach already present in the project unless the team agrees to change it.
 - Follow the Expo and React Native documentation matching the installed versions when working with their APIs.
 
-## 3. Prototype rules
+## 3. Design and prototype guidance
 
-- Before implementing a screen, read the latest HTML prototype in `design_reference/` and inspect the relevant existing code.
-- Recreate its design and behavior as closely as practical using native mobile components: layout, colours, typography, cards, icons, navigation, and interactions.
-- Treat the HTML, CSS, and JavaScript as a reference; do not paste them directly into React Native.
-- Do not invent a different design or remove prototype features without approval.
+- Before changing a screen, inspect its current implementation and the surrounding app so existing design improvements and conventions are preserved.
+- Use the current app design and approved improvements as the baseline. Consult `design_reference/` when it helps clarify product intent or a missing behavior, but do not copy it strictly or undo later improvements to match it.
+- Treat prototype HTML, CSS, and JavaScript as reference material; do not paste them directly into React Native.
+- Keep visual and interaction changes consistent with the current app. Do not introduce a substantially different design or remove useful behavior without coordination.
 - Preserve mobile usability, safe-area spacing, scrolling, accessibility, and dark/light theme behavior where applicable.
 
-## 4. Frontend phase
+## 4. Frontend and backend boundaries
 
-- Focus on completing and integrating the frontend first. Use realistic mock data and local state for demonstrations.
-- Do not connect Supabase, authentication, live location, real notifications, or external services yet.
-- Clearly label simulated functionality in the UI or relevant code so it cannot be mistaken for a production integration.
+- The current app already includes Supabase authentication, profiles, household data, pickup journeys, and selected Trusted Circle operations. Preserve working integrations and inspect their APIs before changing them.
+- Some behavior remains simulated or depends on backend work that has not been approved or applied. Clearly label simulated behavior in the UI and code so it cannot be mistaken for a production integration.
+- Do not assume that invitation approval, pickup permissions, broadcast requests, or every backend API is ready. Confirm the specific feature and its backend status before connecting UI to it.
+- Do not change Trusted Circle database functions, add or apply migrations, or run `supabase db push` or `supabase db reset` without explicit coordination with the project owner. Never apply changes to the shared database as part of local frontend work.
+- Do not add new external services, authentication flows, location sharing, or notifications without team approval. Treat the public Supabase anon/publishable key as client-visible; never put a service-role or other secret key in app code or an `EXPO_PUBLIC_` variable.
 
 ## 5. Existing project structure
 
@@ -52,12 +54,13 @@ SafeNest is a family pickup coordination app. Its frontend demonstrates pickup m
 
 - Check the relevant screen in Expo Go and test navigation, interactions, scrolling, and existing functionality.
 - Run the available TypeScript check (`npx tsc --noEmit`) before declaring work complete. Run other project checks when appropriate and available.
+- Keep tests and verification proportionate to the task. Do not claim checks were run unless they were.
 - Report modified files, checks performed and their results, known issues, and any simulated behavior. Never claim a check was run if it was not.
 
 ## 9. Required workflow
 
 1. Read these instructions before coding.
-2. Inspect the relevant code, dependencies, and latest prototype.
+2. Inspect the relevant code and dependencies; consult `design_reference/` when it is useful context.
 3. State the intended files to modify.
 4. Implement one assigned feature at a time, coordinating shared work as needed.
 5. Test the changes and report the outcome before declaring the task complete.
