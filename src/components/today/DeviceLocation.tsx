@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Icon } from "../navigation/Icon";
 import { useAppContext } from "../shared/AppContext";
+import { mockData } from "../shared/mockData";
 import { Btn, Input, Press, T } from "../shared/ui";
 import { DeviceLocationMap } from "./DeviceLocationMap";
 import type { DeviceLocationCoordinate, DeviceLocationPoint, RouteCoordinate } from "./DeviceLocationMap.types";
@@ -91,6 +92,42 @@ function distanceBetween(first: DeviceLocationCoordinate, second: DeviceLocation
   const a = Math.sin(latitudeDelta / 2) ** 2
     + Math.cos(radians(first.latitude)) * Math.cos(radians(second.latitude)) * Math.sin(longitudeDelta / 2) ** 2;
   return 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function isValidCoordinate(coordinate: DeviceLocationCoordinate): boolean {
+  return Number.isFinite(coordinate.latitude)
+    && Number.isFinite(coordinate.longitude)
+    && coordinate.latitude >= -90
+    && coordinate.latitude <= 90
+    && coordinate.longitude >= -180
+    && coordinate.longitude <= 180;
+}
+
+async function geocodeSchoolAddress(address: string): Promise<DeviceLocationCoordinate> {
+  if (Platform.OS !== "web") {
+    const results = await Location.geocodeAsync(address);
+    const first = results[0];
+    if (!first) throw new Error("No coordinates were found for the saved school address.");
+    const coordinate = { latitude: first.latitude, longitude: first.longitude };
+    if (!isValidCoordinate(coordinate)) throw new Error("The school address returned invalid coordinates.");
+    return coordinate;
+  }
+
+  const response = await fetch(
+    `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(address)}`,
+    { headers: { Accept: "application/json" } },
+  );
+  if (!response.ok) throw new Error(`School address lookup failed with status ${response.status}.`);
+  const payload: unknown = await response.json();
+  if (!Array.isArray(payload) || !isRecord(payload[0])) {
+    throw new Error("No coordinates were found for the saved school address.");
+  }
+  const coordinate = {
+    latitude: Number(payload[0].lat),
+    longitude: Number(payload[0].lon),
+  };
+  if (!isValidCoordinate(coordinate)) throw new Error("The school address returned invalid coordinates.");
+  return coordinate;
 }
 
 function parseOsrmResponse(payload: unknown): PlannedRoute[] {
@@ -211,20 +248,24 @@ function formatHeading(heading: number | null): string {
 }
 
 export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLocationError }: DeviceLocationModalProps) {
-  const { theme } = useAppContext();
+  const { theme, schoolLocation } = useAppContext();
   const colors = theme.colors;
   const insets = useSafeAreaInsets();
   const subscription = useRef<LocationSubscription | null>(null);
   const trackingRequestId = useRef(0);
+  const schoolLocationRequestId = useRef(0);
   const routingRequestId = useRef(0);
   const routingController = useRef<AbortController | null>(null);
   const routeOptionsRef = useRef<PlannedRoute[]>([]);
   const selectedRouteIdRef = useRef<string | null>(null);
   const navigationActiveRef = useRef(false);
+  const schoolDestinationRef = useRef(false);
+  const automaticRouteKeyRef = useRef<string | null>(null);
   const progressIndexRef = useRef(0);
   const callbacks = useRef({ onLocationUpdate, onLocationError });
   callbacks.current = { onLocationUpdate, onLocationError };
   const [location, setLocation] = useState<LocationObject | null>(null);
+  const locationRef = useRef<LocationObject | null>(null);
   const [currentLatitude, setCurrentLatitude] = useState("");
   const [currentLongitude, setCurrentLongitude] = useState("");
   const [destinationLatitude, setDestinationLatitude] = useState("");
@@ -244,23 +285,32 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeError, setRouteError] = useState("");
+  const [schoolLoading, setSchoolLoading] = useState(false);
   const [navigationActive, setNavigationActive] = useState(false);
   const [navigationProgress, setNavigationProgress] = useState<NavigationProgress | null>(null);
 
   routeOptionsRef.current = routeOptions;
   selectedRouteIdRef.current = selectedRouteId;
 
+  const currentCoordinates = parseCoordinates(currentLatitude, currentLongitude);
+  const destinationCoordinates = parseCoordinates(destinationLatitude, destinationLongitude);
+  const destinationPoint = destinationCoordinates.kind === "valid" ? destinationCoordinates.coordinate : null;
+
   useEffect(() => {
     if (visible) return;
     trackingRequestId.current += 1;
+    schoolLocationRequestId.current += 1;
     routingRequestId.current += 1;
     routingController.current?.abort();
     routingController.current = null;
     subscription.current?.remove();
     subscription.current = null;
+    locationRef.current = null;
     routeOptionsRef.current = [];
     selectedRouteIdRef.current = null;
     navigationActiveRef.current = false;
+    schoolDestinationRef.current = false;
+    automaticRouteKeyRef.current = null;
     progressIndexRef.current = 0;
     setLocation(null);
     setCurrentLatitude("");
@@ -282,6 +332,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     setSelectedRouteId(null);
     setRouteLoading(false);
     setRouteError("");
+    setSchoolLoading(false);
     setNavigationActive(false);
     setNavigationProgress(null);
   }, [visible]);
@@ -315,6 +366,9 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   };
 
   const clearRoutePlan = () => {
+    schoolLocationRequestId.current += 1;
+    schoolDestinationRef.current = false;
+    automaticRouteKeyRef.current = null;
     routingRequestId.current += 1;
     routingController.current?.abort();
     routingController.current = null;
@@ -325,6 +379,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     setRouteOptions([]);
     setSelectedRouteId(null);
     setRouteLoading(false);
+    setSchoolLoading(false);
     setRouteError("");
     setNavigationActive(false);
     setNavigationProgress(null);
@@ -339,6 +394,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   const updateLocation = (next: LocationObject) => {
     const latitude = next.coords.latitude;
     const longitude = next.coords.longitude;
+    locationRef.current = next;
     setLocation(next);
     setCurrentLatitude(latitude.toFixed(6));
     setCurrentLongitude(longitude.toFixed(6));
@@ -438,8 +494,13 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     navigateAfterFix = false,
     plannedDestination?: DeviceLocationCoordinate,
     preferredRouteId?: string | null,
-  ) => {
-    if (busy || tracking) return;
+  ): Promise<DeviceLocationCoordinate | null> => {
+    if (busy || tracking) {
+      const current = locationRef.current;
+      return current
+        ? { latitude: current.coords.latitude, longitude: current.coords.longitude }
+        : null;
+    }
     const requestId = trackingRequestId.current + 1;
     trackingRequestId.current = requestId;
     const isCurrentRequest = () => requestId === trackingRequestId.current && visible;
@@ -448,25 +509,25 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     setPermissionBlocked(false);
     try {
       let permission = await Location.getForegroundPermissionsAsync();
-      if (!isCurrentRequest()) return;
+      if (!isCurrentRequest()) return null;
       if (permission.status !== "granted") {
         permission = await Location.requestForegroundPermissionsAsync();
       }
-      if (!isCurrentRequest()) return;
+      if (!isCurrentRequest()) return null;
       if (permission.status !== "granted") {
         setPermissionBlocked(!permission.canAskAgain);
         reportLocationError("Location permission is needed to show this phone on the map.");
-        return;
+        return null;
       }
       const servicesEnabled = await Location.hasServicesEnabledAsync();
-      if (!isCurrentRequest()) return;
+      if (!isCurrentRequest()) return null;
       if (!servicesEnabled) {
         reportLocationError("Turn on location services on this phone, then try again.");
-        return;
+        return null;
       }
 
       const initial = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      if (!isCurrentRequest()) return;
+      if (!isCurrentRequest()) return null;
       updateLocation(initial);
       if (navigateAfterFix && plannedDestination) {
         const routeReady = await calculateRoutes(
@@ -474,10 +535,14 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
           plannedDestination,
           preferredRouteId,
         );
-        if (!isCurrentRequest() || !routeReady) return;
+        if (!isCurrentRequest() || !routeReady) return null;
         navigationActiveRef.current = true;
         setNavigationActive(true);
       }
+      const currentCoordinate = {
+        latitude: initial.coords.latitude,
+        longitude: initial.coords.longitude,
+      };
       const nextSubscription = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.Balanced,
@@ -497,22 +562,90 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
       );
       if (!isCurrentRequest()) {
         nextSubscription.remove();
-        return;
+        return null;
       }
       subscription.current?.remove();
       subscription.current = nextSubscription;
       setTracking(true);
+      return currentCoordinate;
     } catch (cause) {
-      if (!isCurrentRequest()) return;
+      if (!isCurrentRequest()) return null;
       const reason = cause instanceof Error ? cause.message : "Unknown location error";
       reportLocationError("Unable to get this phone's location. Check GPS availability and try again.", reason);
+      return null;
     } finally {
       if (isCurrentRequest()) setBusy(false);
     }
   };
 
-  const currentCoordinates = parseCoordinates(currentLatitude, currentLongitude);
-  const destinationCoordinates = parseCoordinates(destinationLatitude, destinationLongitude);
+  const startTrackingRef = useRef(startTracking);
+  startTrackingRef.current = startTracking;
+  const calculateRoutesRef = useRef(calculateRoutes);
+  calculateRoutesRef.current = calculateRoutes;
+
+  useEffect(() => {
+    if (!visible) return;
+    void startTrackingRef.current();
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+    const requestId = schoolLocationRequestId.current + 1;
+    schoolLocationRequestId.current = requestId;
+    const isCurrentRequest = () => !cancelled && requestId === schoolLocationRequestId.current;
+    setSchoolLoading(true);
+    schoolDestinationRef.current = false;
+
+    void (async () => {
+      try {
+        const schoolCoordinate = schoolLocation && isValidCoordinate(schoolLocation)
+          ? schoolLocation
+          : await geocodeSchoolAddress(`${mockData.school.name}, ${mockData.school.address}`);
+        if (!isCurrentRequest()) return;
+        const schoolName = schoolLocation ? "Child's school" : mockData.school.name;
+        setDestinationLatitude(schoolCoordinate.latitude.toFixed(6));
+        setDestinationLongitude(schoolCoordinate.longitude.toFixed(6));
+        setDestinationText(schoolName);
+        setActiveSearch(null);
+        schoolDestinationRef.current = true;
+        setSchoolLoading(false);
+      } catch (cause) {
+        if (!isCurrentRequest()) return;
+        setSchoolLoading(false);
+        const reason = cause instanceof Error
+          ? cause.message
+          : "Unknown school geocoding error.";
+        const message = `Unable to locate ${mockData.school.name}. ${reason}`;
+        setRouteError(message);
+        callbacks.current.onLocationError?.(new Error(message));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      schoolLocationRequestId.current += 1;
+    };
+  }, [visible, schoolLocation]);
+
+  useEffect(() => {
+    if (!visible || schoolLoading || !schoolDestinationRef.current || !location || !destinationPoint) return;
+    const routeKey = `${destinationPoint.latitude.toFixed(6)},${destinationPoint.longitude.toFixed(6)}`;
+    if (automaticRouteKeyRef.current === routeKey) return;
+    automaticRouteKeyRef.current = routeKey;
+    void calculateRoutesRef.current({
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+    }, destinationPoint);
+  }, [
+    visible,
+    schoolLoading,
+    location?.coords.latitude,
+    location?.coords.longitude,
+    destinationPoint?.latitude,
+    destinationPoint?.longitude,
+  ]);
+
   const currentPoint: DeviceLocationPoint | null = currentCoordinates.kind === "valid"
     ? {
       ...currentCoordinates.coordinate,
@@ -521,7 +654,6 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
       detail: tracking ? "Live device location" : "Selected current location",
     }
     : null;
-  const destinationPoint = destinationCoordinates.kind === "valid" ? destinationCoordinates.coordinate : null;
   const selectDestination = (coordinate: DeviceLocationCoordinate) => {
     clearRoutePlan();
     setDestinationLatitude(coordinate.latitude.toFixed(6));
@@ -690,8 +822,10 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
           ) : (
             <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 28, gap: 10 }}>
               <Icon name="look" size={34} color={colors.primary} stroke={1.8} />
-              <T w={700} align="center">Choose a starting point and destination</T>
-              <T s={0.88} c="muted" align="center" lh={1.4}>The route map appears when both points are set.</T>
+              <T w={700} align="center">{schoolLoading ? "Finding your location and the school" : "Choose a starting point and destination"}</T>
+              <T s={0.88} c="muted" align="center" lh={1.4}>
+                {schoolLoading ? "Using the saved school details to prepare your route." : "The route map appears when both points are set."}
+              </T>
             </View>
           )}
         </View>
@@ -758,6 +892,9 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
               <Icon name="look" size={18} color={colors.primary} />
               <T s={0.86} w={700} c={colors.primaryInk}>{busy ? "Finding your location..." : tracking ? "Using live device location" : "Use current location"}</T>
             </Press>
+            {schoolLoading ? (
+              <T s={0.78} c="muted">Finding {mockData.school.name} from the saved school address...</T>
+            ) : null}
           </View>
 
           <Press
