@@ -1,0 +1,27 @@
+// Run from the project root: node tests/eta.test.mjs  (needs esbuild installed, it ships with Expo's toolchain)
+import { build } from "esbuild";
+import { pathToFileURL } from "node:url";
+import fs from "node:fs";
+const out = "tests/.eta.bundle.mjs";
+await build({ entryPoints: ["src/components/shared/eta.ts"], bundle: true, format: "esm", outfile: out, logLevel: "silent" });
+const { fetchRouteMinutes } = await import(pathToFileURL(out).href + "?" + Date.now());
+fs.rmSync(out);
+let pass = 0, fail = 0;
+const t = (n, c) => { c ? pass++ : fail++; console.log(`${c ? "PASS" : "FAIL"}  ${n}`); };
+const from = { latitude: 2.2, longitude: 102.25 }, to = { latitude: 2.19, longitude: 102.3 };
+const json = (b, ok = true, status = 200) => async () => ({ ok, status, json: async () => b });
+let r = await fetchRouteMinutes(from, to, { fetchImpl: json({ code: "Ok", routes: [{ duration: 1260 }] }) });
+t("21 minute route returns 21", r.ok && r.minutes === 21);
+r = await fetchRouteMinutes(from, to, { fetchImpl: json({ code: "Ok", routes: [{ duration: 1201 }] }) });
+t("rounds up partial minutes", r.ok && r.minutes === 21);
+r = await fetchRouteMinutes(from, to, { fetchImpl: json({ code: "NoRoute", routes: [] }) });
+t("no route is a failure, not a guess", !r.ok);
+r = await fetchRouteMinutes(from, to, { fetchImpl: json({}, false, 500) });
+t("server error is a failure", !r.ok);
+r = await fetchRouteMinutes(from, to, { fetchImpl: async () => { throw new Error("Failed to fetch"); } });
+t("network failure is a failure", !r.ok && r.reason === "network");
+r = await fetchRouteMinutes(from, to, { fetchImpl: json({ code: "Ok", routes: [{ duration: -5 }] }) });
+t("nonsense duration rejected", !r.ok);
+r = await fetchRouteMinutes(from, to, { timeoutMs: 20, fetchImpl: (_u, o) => new Promise((_, rej) => o.signal.addEventListener("abort", () => rej(new Error("aborted")))) });
+t("hung request times out", !r.ok);
+console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

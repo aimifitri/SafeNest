@@ -1,0 +1,86 @@
+// PROPOSAL. NOT DEPLOYED. A Supabase Edge Function (Deno).
+// Saved as .txt so the Expo TypeScript check ignores it. To use it, the backend team copies it to
+// supabase/functions/send-pickup-push/index.ts and deploys it.
+//
+// What it does: a Database Webhook calls it for every new row in public.push_outbox. It looks the row up again
+// (it never trusts the request body for who to notify), finds that person's phones, sends the message through
+// Expo's push service, removes phones Expo says are gone, and marks the row sent.
+//
+// Secrets it needs (set them with `supabase secrets set`, never in the app):
+//   PUSH_WEBHOOK_SECRET   a long random string. The webhook sends it in the x-webhook-secret header.
+//   EXPO_ACCESS_TOKEN     optional, only if "enhanced push security" is turned on in the Expo project.
+// SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided to Edge Functions automatically.
+import { createClient } from "npm:@supabase/supabase-js@2";
+
+const EXPO_URL = "https://exp.host/--/api/v2/push/send";
+
+type Row = { id: string; user_id: string; title: string; body: string; data: Record<string, unknown>; sent_at: string | null };
+type Ticket = { status: "ok" | "error"; message?: string; details?: { error?: string } };
+
+const reply = (status: number, text: string) => new Response(text, { status });
+
+Deno.serve(async (req) => {
+  if (req.method !== "POST") return reply(405, "Method not allowed");
+  const secret = Deno.env.get("PUSH_WEBHOOK_SECRET");
+  if (!secret || req.headers.get("x-webhook-secret") !== secret) return reply(401, "Unauthorized");
+
+  const payload = await req.json().catch(() => null);
+  const id = payload?.record?.id;
+  if (typeof id !== "string") return reply(400, "Bad request");
+
+  const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+    auth: { persistSession: false },
+  });
+
+  const { data: row } = await db.from("push_outbox").select("id, user_id, title, body, data, sent_at").eq("id", id).maybeSingle<Row>();
+  if (!row) return reply(404, "Not found");
+  if (row.sent_at) return reply(200, "Already sent");
+
+  const { data: tokens } = await db.from("push_tokens").select("token").eq("user_id", row.user_id);
+  if (!tokens || tokens.length === 0) {
+    // Nobody to send to is not a failure. Record it so it is not retried forever.
+    await db.from("push_outbox").update({ sent_at: new Date().toISOString(), error: "no registered phone" }).eq("id", row.id);
+    return reply(200, "No phone registered");
+  }
+
+  const messages = tokens.map((t) => ({
+    to: t.token,
+    title: row.title,
+    body: row.body,
+    data: row.data,
+    sound: "default",
+    priority: "high",
+    channelId: "pickup", // the Android channel the app creates
+  }));
+
+  const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json" };
+  const expoToken = Deno.env.get("EXPO_ACCESS_TOKEN");
+  if (expoToken) headers.authorization = `Bearer ${expoToken}`;
+
+  let tickets: Ticket[];
+  try {
+    const res = await fetch(EXPO_URL, { method: "POST", headers, body: JSON.stringify(messages) });
+    if (!res.ok) throw new Error(`Expo answered ${res.status}`);
+    const json = await res.json();
+    tickets = Array.isArray(json?.data) ? json.data : [];
+  } catch (e) {
+    // Leave sent_at empty so a later retry job can try again. The webhook itself does not retry.
+    await db.from("push_outbox").update({ error: String(e instanceof Error ? e.message : e).slice(0, 300) }).eq("id", row.id);
+    return reply(502, "Push service unavailable");
+  }
+
+  // A phone Expo says no longer exists (app removed, token expired): forget it.
+  const dead = tokens.filter((_, i) => tickets[i]?.status === "error" && tickets[i]?.details?.error === "DeviceNotRegistered").map((t) => t.token);
+  if (dead.length > 0) await db.from("push_tokens").delete().in("token", dead);
+
+  const otherErrors = tickets
+    .filter((t) => t.status === "error" && t.details?.error !== "DeviceNotRegistered")
+    .map((t) => t.message ?? t.details?.error ?? "error");
+  await db
+    .from("push_outbox")
+    .update({ sent_at: new Date().toISOString(), error: otherErrors.length ? otherErrors.join("; ").slice(0, 300) : null })
+    .eq("id", row.id);
+
+  // "ok" here means Expo accepted the message. It does not prove the phone showed it.
+  return reply(200, "Sent");
+});
