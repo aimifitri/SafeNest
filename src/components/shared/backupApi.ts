@@ -1,4 +1,5 @@
 import { supabase } from "../../lib/supabase";
+import { uniqueChannelName } from "./realtimeChannel";
 import type { BackupRequest } from "./types";
 
 // Backup-pickup calls to Supabase. Every write goes through a database function
@@ -18,6 +19,7 @@ export type DbBackupRequest = {
 
 export type BackupAssignment = {
   request_id: string;
+  child_id: string;
   state: "requested" | "accepted";
   requested_at: string;
   child_name: string;
@@ -37,9 +39,15 @@ export function friendlyBackupError(message: string | undefined): string {
   if (m.includes("already active")) return "A backup request is already open for this child. Cancel it first.";
   if (m.includes("not joined")) return "This helper has not joined SafeNest yet, so they cannot answer.";
   if (m.includes("not approved")) return "This helper is not approved yet.";
-  if (m.includes("already accepted")) return "This request was already accepted.";
+  if (m.includes("already accepted") || m.includes("already covered")) return "This request was already accepted.";
+  if (m.includes("already closed")) return "Someone else already accepted, so this request was closed.";
+  if (m.includes("already expired")) return "This request ran out of time.";
   if (m.includes("already declined")) return "This request was already declined.";
-  if (m.includes("already cancelled")) return "This request was cancelled.";
+  if (m.includes("already in progress")) return "A pickup journey is already in progress for this child.";
+  if (m.includes("arrived at school first")) return "Tap \"I've arrived at school\" first.";
+  if (m.includes("already at_school") || m.includes("already started")) return "That step was already recorded.";
+  if (m.includes("already collected")) return "This pickup is already done.";
+  if (m.includes("already cancelled")) return "This was already cancelled.";
   if (m.includes("already completed")) return "This pickup is already marked complete.";
   if (m.includes("only an accepted")) return "Only an accepted request can be marked complete.";
   if (m.includes("not allowed")) return "You are not allowed to do that.";
@@ -50,7 +58,7 @@ export function friendlyBackupError(message: string | undefined): string {
   return "Something went wrong. Nothing was changed. Please try again.";
 }
 
-async function call<T>(run: () => PromiseLike<{ data: T | null; error: { message: string } | null }>): Promise<ApiResult<T | null>> {
+export async function call<T>(run: () => PromiseLike<{ data: T | null; error: { message: string } | null }>): Promise<ApiResult<T | null>> {
   try {
     const { data, error } = await run();
     if (error) return { ok: false, error: friendlyBackupError(error.message) };
@@ -60,12 +68,35 @@ async function call<T>(run: () => PromiseLike<{ data: T | null; error: { message
   }
 }
 
+export type StoredChild = { id: string; school: { latitude: number; longitude: number } | null };
+
+/**
+ * The first child stored for this family, or null if none has been saved yet.
+ * The school's coordinates are optional (supabase/school_location.sql). If that migration has not
+ * been applied, or the school has no coordinates, `school` is null and Today says it cannot estimate.
+ */
+export async function fetchFirstChild(familyId: string): Promise<StoredChild | null> {
+  type Row = { id: string; school_latitude?: number | null; school_longitude?: number | null };
+  let res = await call<Row[]>(() =>
+    supabase.from("children").select("id, school_latitude, school_longitude").eq("family_id", familyId).order("created_at", { ascending: true }).limit(1),
+  );
+  if (!res.ok) {
+    // Column missing (migration not applied yet): fall back to just the id.
+    res = await call<Row[]>(() =>
+      supabase.from("children").select("id").eq("family_id", familyId).order("created_at", { ascending: true }).limit(1),
+    );
+  }
+  const row = res.ok ? res.data?.[0] : undefined;
+  if (!row) return null;
+  const lat = row.school_latitude;
+  const lng = row.school_longitude;
+  const valid = typeof lat === "number" && typeof lng === "number" && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+  return { id: row.id, school: valid ? { latitude: lat, longitude: lng } : null };
+}
+
 /** The first child stored for this family, or null if none has been saved yet. */
 export async function fetchFirstChildId(familyId: string): Promise<string | null> {
-  const res = await call<{ id: string }[]>(() =>
-    supabase.from("children").select("id").eq("family_id", familyId).order("created_at", { ascending: true }).limit(1),
-  );
-  return res.ok ? res.data?.[0]?.id ?? null : null;
+  return (await fetchFirstChild(familyId))?.id ?? null;
 }
 
 export async function fetchLatestRequest(childId: string): Promise<ApiResult<DbBackupRequest | null>> {
@@ -110,7 +141,7 @@ export async function fetchAssignments(): Promise<ApiResult<BackupAssignment[]>>
  */
 export function subscribeToRequests(key: string, onChange: () => void): () => void {
   const channel = supabase
-    .channel(`backup-requests-${key}`)
+    .channel(uniqueChannelName(`backup-requests-${key}`))
     .on("postgres_changes", { event: "*", schema: "public", table: "backup_requests" }, () => onChange())
     .subscribe();
   return () => {

@@ -30,13 +30,13 @@ import {
   cancelRequest,
   completeRequest,
   createBackupRequest,
-  fetchFirstChildId,
+  fetchFirstChild,
   fetchLatestRequest,
   isUuid,
   subscribeToRequests,
   toUiRequest,
 } from "./backupApi";
-import type { ApiResult } from "./backupApi";
+import type { ApiResult, StoredChild } from "./backupApi";
 import { mockData } from "./mockData";
 
 import type {
@@ -93,6 +93,10 @@ interface AppContextValue {
   backupRequest: BackupRequest;
   // true when this family has a stored child, so requests to real helpers go through Supabase.
   backupLive: boolean;
+  // Database id of that child (null while the app is still on the demo child).
+  storedChildId: string | null;
+  // Where the school is, if saved (children.school_latitude / school_longitude). Needed for travel-time estimates.
+  schoolLocation: { latitude: number; longitude: number } | null;
   backupBusy: boolean;
   backupError: string | null;
   dismissBackupError: () => void;
@@ -193,7 +197,8 @@ export function AppProvider({
     useState<BackupRequest>(mockData.backupRequest);
   const [backupBusy, setBackupBusy] = useState(false);
   const [backupError, setBackupError] = useState<string | null>(null);
-  const [dbChildId, setDbChildId] = useState<string | null>(null);
+  const [dbChild, setDbChild] = useState<StoredChild | null>(null);
+  const dbChildId = dbChild?.id ?? null;
   const backupRef = useRef<BackupRequest>(backupRequest);
   const busyRef = useRef(false);
   const dismissedId = useRef<string | null>(null);
@@ -206,12 +211,12 @@ export function AppProvider({
   const userId = session?.user.id;
   useEffect(() => {
     if (!familyId || !userId) {
-      setDbChildId(null);
+      setDbChild(null);
       return;
     }
     let active = true;
-    void fetchFirstChildId(familyId).then((id) => {
-      if (active) setDbChildId(id);
+    void fetchFirstChild(familyId).then((child) => {
+      if (active) setDbChild(child);
     });
     return () => {
       active = false;
@@ -352,6 +357,8 @@ export function AppProvider({
       // Existing backup pickup behaviour.
       backupRequest,
       backupLive: dbChildId !== null,
+      storedChildId: dbChildId,
+      schoolLocation: dbChild?.school ?? null,
       backupBusy,
       backupError,
       dismissBackupError: () => setBackupError(null),
@@ -389,6 +396,7 @@ export function AppProvider({
       backupBusy,
       backupError,
       dbChildId,
+      dbChild,
       refreshBackup,
       trustedHelpers,
       theme,

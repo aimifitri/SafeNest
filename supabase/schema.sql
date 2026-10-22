@@ -366,32 +366,3 @@ revoke execute on function public.create_helper_invite(uuid) from public, anon;
 revoke execute on function public.accept_helper_invite(text) from public, anon;
 grant execute on function public.create_helper_invite(uuid) to authenticated;
 grant execute on function public.accept_helper_invite(text) to authenticated;
-
--- Step 1: ensure a family has one child + default Mon-Fri schedule
-create function public.ensure_child(fid uuid, child_name text default 'Laila')
-returns uuid
-language plpgsql security definer set search_path = ''
-as $$
-declare
-  cid uuid;
-begin
-  if not public.is_family_member(fid) then
-    raise exception 'Not allowed';
-  end if;
-
-  select id into cid from public.children where family_id = fid order by created_at limit 1;
-  if cid is not null then
-    return cid;
-  end if;
-
-  insert into public.children (family_id, name) values (fid, child_name) returning id into cid;
-
-  insert into public.pickup_plans (family_id, child_id, weekday, dismissal_time)
-  select fid, cid, d, '1:00 PM' from generate_series(1, 5) as d;
-
-  return cid;
-end;
-$$;
-
-revoke execute on function public.ensure_child(uuid, text) from public, anon;
-grant execute on function public.ensure_child(uuid, text) to authenticated;
