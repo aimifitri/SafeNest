@@ -14,7 +14,6 @@ import type { DeviceLocationCoordinate, DeviceLocationPoint, RouteCoordinate } f
 import { TripSharing } from "./TripSharing";
 
 type SearchTarget = "start" | "destination";
-type TravelMode = "driving" | "motorcycle" | "transit" | "walking" | "cycling";
 
 export type LiveLocationUpdate = {
   latitude: number;
@@ -32,14 +31,6 @@ type DeviceLocationModalProps = {
   onLocationError?: (error: Error) => void;
 };
 
-const TRAVEL_MODES: ReadonlyArray<{ id: TravelMode; label: string; icon: "car" | "motorbike" | "bus" | "walk" | "bicycle" }> = [
-  { id: "driving", label: "Driving", icon: "car" },
-  { id: "motorcycle", label: "Motorcycle", icon: "motorbike" },
-  { id: "transit", label: "Transit", icon: "bus" },
-  { id: "walking", label: "Walking", icon: "walk" },
-  { id: "cycling", label: "Bicycle", icon: "bicycle" },
-];
-
 const DEMO_PLACES: ReadonlyArray<{ name: string; coordinate: DeviceLocationCoordinate }> = [
   { name: "Kajang, Selangor", coordinate: { latitude: 2.9935, longitude: 101.7878 } },
   { name: "Kuala Lumpur, Malaysia", coordinate: { latitude: 3.139, longitude: 101.6869 } },
@@ -52,13 +43,21 @@ type PlannedRoute = {
   id: string;
   coordinates: RouteCoordinate[];
   cumulativeMeters: number[];
+  maneuvers: NavigationManeuver[];
   distanceMeters: number;
   durationSeconds: number;
   roadSummary: string;
 };
 
+type NavigationManeuver = {
+  distanceAlongMeters: number;
+  instruction: string;
+  modifier: string | null;
+};
+
 type NavigationProgress = {
   travelledCoordinates: RouteCoordinate[];
+  travelledMeters: number;
   remainingMeters: number;
   deviationMeters: number;
   nearestIndex: number;
@@ -103,13 +102,13 @@ function isValidCoordinate(coordinate: DeviceLocationCoordinate): boolean {
     && coordinate.longitude <= 180;
 }
 
-async function geocodeSchoolAddress(address: string): Promise<DeviceLocationCoordinate> {
+async function geocodeAddress(address: string): Promise<DeviceLocationCoordinate> {
   if (Platform.OS !== "web") {
     const results = await Location.geocodeAsync(address);
     const first = results[0];
-    if (!first) throw new Error("No coordinates were found for the saved school address.");
+    if (!first) throw new Error("No coordinates were found for this address.");
     const coordinate = { latitude: first.latitude, longitude: first.longitude };
-    if (!isValidCoordinate(coordinate)) throw new Error("The school address returned invalid coordinates.");
+    if (!isValidCoordinate(coordinate)) throw new Error("The address returned invalid coordinates.");
     return coordinate;
   }
 
@@ -117,17 +116,47 @@ async function geocodeSchoolAddress(address: string): Promise<DeviceLocationCoor
     `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(address)}`,
     { headers: { Accept: "application/json" } },
   );
-  if (!response.ok) throw new Error(`School address lookup failed with status ${response.status}.`);
+  if (!response.ok) throw new Error(`Address lookup failed with status ${response.status}.`);
   const payload: unknown = await response.json();
   if (!Array.isArray(payload) || !isRecord(payload[0])) {
-    throw new Error("No coordinates were found for the saved school address.");
+    throw new Error("No coordinates were found for this address.");
   }
   const coordinate = {
     latitude: Number(payload[0].lat),
     longitude: Number(payload[0].lon),
   };
-  if (!isValidCoordinate(coordinate)) throw new Error("The school address returned invalid coordinates.");
+  if (!isValidCoordinate(coordinate)) throw new Error("The address returned invalid coordinates.");
   return coordinate;
+}
+
+function makeManeuverInstruction(type: string, modifier: string | null, roadName: string): string {
+  const road = roadName ? ` at ${roadName}` : "";
+  if (type === "arrive") return "Arrive at destination";
+  if (type === "roundabout" || type === "rotary") return `Enter the roundabout${road}`;
+  if (type === "merge") return `Merge${modifier ? ` ${modifier}` : ""}${road}`;
+  if (type === "fork") return `Keep ${modifier ?? "straight"}${road}`;
+  if (type === "on ramp") return `Take the ramp${road}`;
+  if (type === "off ramp") return `Take the exit${road}`;
+  if (type === "depart") return `Head toward${roadName ? ` ${roadName}` : " your destination"}`;
+  if (modifier) return `Turn ${modifier}${road}`;
+  return `Continue${road}`;
+}
+
+function parsePickupMinute(time: string): number | null {
+  const match = /^\s*(\d{1,2}):(\d{2})\s*(AM|PM)?\s*$/i.exec(time);
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const meridiem = match[3]?.toUpperCase();
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || minute > 59) return null;
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return null;
+    hour %= 12;
+    if (meridiem === "PM") hour += 12;
+  } else if (hour > 23) {
+    return null;
+  }
+  return hour * 60 + minute;
 }
 
 function parseOsrmResponse(payload: unknown): PlannedRoute[] {
@@ -172,11 +201,26 @@ function parseOsrmResponse(payload: unknown): PlannedRoute[] {
     }
 
     const roadNames: string[] = [];
+    const maneuvers: NavigationManeuver[] = [];
+    let distanceAlongMeters = 0;
     if (Array.isArray(rawRoute.legs)) {
       for (const leg of rawRoute.legs) {
         if (!isRecord(leg) || !Array.isArray(leg.steps)) continue;
         for (const step of leg.steps) {
-          if (isRecord(step) && typeof step.name === "string" && step.name.trim()) roadNames.push(step.name.trim());
+          if (!isRecord(step)) continue;
+          const roadName = typeof step.name === "string" ? step.name.trim() : "";
+          if (roadName) roadNames.push(roadName);
+          const stepDistance = typeof step.distance === "number" && Number.isFinite(step.distance)
+            ? Math.max(0, step.distance)
+            : 0;
+          if (isRecord(step.maneuver) && typeof step.maneuver.type === "string") {
+            const modifier = typeof step.maneuver.modifier === "string" ? step.maneuver.modifier : null;
+            const instruction = makeManeuverInstruction(step.maneuver.type, modifier, roadName);
+            if (step.maneuver.type !== "depart") {
+              maneuvers.push({ distanceAlongMeters, instruction, modifier });
+            }
+          }
+          distanceAlongMeters += stepDistance;
         }
       }
     }
@@ -185,6 +229,7 @@ function parseOsrmResponse(payload: unknown): PlannedRoute[] {
       id: `osrm-${routeIndex}`,
       coordinates,
       cumulativeMeters,
+      maneuvers,
       distanceMeters: distance,
       durationSeconds: duration,
       roadSummary: summary.length > 0 ? `via ${summary.join(" · ")}` : "Suggested driving route",
@@ -215,6 +260,7 @@ function getNavigationProgress(route: PlannedRoute, coordinate: DeviceLocationCo
     + (nearestCoordinate ? distanceBetween(coordinate, nearestCoordinate) : 0);
   return {
     travelledCoordinates: route.coordinates.slice(0, nearestIndex + 1),
+    travelledMeters: routeMetersCovered,
     remainingMeters,
     deviationMeters,
     nearestIndex,
@@ -236,19 +282,25 @@ function formatEta(seconds: number): string {
   return new Date(Date.now() + seconds * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-function formatSpeed(speed: number | null): string {
-  return speed === null || speed < 0 ? "Unavailable" : `${Math.round(speed * 3.6)} km/h`;
-}
-
-function formatHeading(heading: number | null): string {
-  if (heading === null || heading < 0) return "Unavailable";
-  const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"] as const;
-  const normalized = ((heading % 360) + 360) % 360;
-  return `${Math.round(normalized)}° ${directions[Math.round(normalized / 45) % directions.length]}`;
+function formatNavigationEta(seconds: number): string {
+  return new Date(Date.now() + seconds * 1000).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLocationError }: DeviceLocationModalProps) {
-  const { theme, schoolLocation } = useAppContext();
+  const {
+    theme,
+    schoolLocation,
+    weeklySchedule,
+    temporaryDismissal,
+    requestBackupPickup,
+    backupBusy,
+    backupError,
+    backupRequest,
+  } = useAppContext();
   const colors = theme.colors;
   const insets = useSafeAreaInsets();
   const subscription = useRef<LocationSubscription | null>(null);
@@ -261,6 +313,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   const navigationActiveRef = useRef(false);
   const schoolDestinationRef = useRef(false);
   const automaticRouteKeyRef = useRef<string | null>(null);
+  const automaticPromptDateRef = useRef<string | null>(null);
   const progressIndexRef = useRef(0);
   const callbacks = useRef({ onLocationUpdate, onLocationError });
   callbacks.current = { onLocationUpdate, onLocationError };
@@ -273,8 +326,6 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   const [startText, setStartText] = useState("");
   const [destinationText, setDestinationText] = useState("");
   const [activeSearch, setActiveSearch] = useState<SearchTarget | null>(null);
-  const [showCoordinates, setShowCoordinates] = useState(false);
-  const [travelMode, setTravelMode] = useState<TravelMode>("driving");
   const [expandedRoute, setExpandedRoute] = useState<string | null>(null);
   const [previewRoute, setPreviewRoute] = useState<string | null>(null);
   const [tracking, setTracking] = useState(false);
@@ -288,16 +339,20 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   const [schoolLoading, setSchoolLoading] = useState(false);
   const [navigationActive, setNavigationActive] = useState(false);
   const [navigationProgress, setNavigationProgress] = useState<NavigationProgress | null>(null);
+  const [autoPresented, setAutoPresented] = useState(false);
+  const [estimateOpen, setEstimateOpen] = useState(false);
+  const [backupNotice, setBackupNotice] = useState("");
 
   routeOptionsRef.current = routeOptions;
   selectedRouteIdRef.current = selectedRouteId;
 
+  const screenPresented = visible || autoPresented;
   const currentCoordinates = parseCoordinates(currentLatitude, currentLongitude);
   const destinationCoordinates = parseCoordinates(destinationLatitude, destinationLongitude);
   const destinationPoint = destinationCoordinates.kind === "valid" ? destinationCoordinates.coordinate : null;
 
   useEffect(() => {
-    if (visible) return;
+    if (screenPresented) return;
     trackingRequestId.current += 1;
     schoolLocationRequestId.current += 1;
     routingRequestId.current += 1;
@@ -320,8 +375,6 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     setStartText("");
     setDestinationText("");
     setActiveSearch(null);
-    setShowCoordinates(false);
-    setTravelMode("driving");
     setExpandedRoute(null);
     setPreviewRoute(null);
     setTracking(false);
@@ -335,7 +388,38 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     setSchoolLoading(false);
     setNavigationActive(false);
     setNavigationProgress(null);
-  }, [visible]);
+    setEstimateOpen(false);
+    setBackupNotice("");
+  }, [screenPresented]);
+
+  useEffect(() => {
+    const checkPickupTime = () => {
+      const now = new Date();
+      const day = now.getDay();
+      if (day < 1 || day > 5) return;
+      const weekday = day as 1 | 2 | 3 | 4 | 5;
+      const scheduledText = temporaryDismissal?.weekday === weekday
+        ? temporaryDismissal.time
+        : weeklySchedule[weekday];
+      const scheduledMinute = parsePickupMinute(scheduledText);
+      if (scheduledMinute === null || now.getHours() * 60 + now.getMinutes() < scheduledMinute) return;
+      const dateKey = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+      if (automaticPromptDateRef.current === dateKey) return;
+      automaticPromptDateRef.current = dateKey;
+      setAutoPresented(true);
+      setEstimateOpen(true);
+    };
+
+    checkPickupTime();
+    const timer = setInterval(checkPickupTime, 30_000);
+    const listener = AppState.addEventListener("change", (state) => {
+      if (state === "active") checkPickupTime();
+    });
+    return () => {
+      clearInterval(timer);
+      listener.remove();
+    };
+  }, [temporaryDismissal, weeklySchedule]);
 
   useEffect(() => () => {
     trackingRequestId.current += 1;
@@ -398,7 +482,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     setLocation(next);
     setCurrentLatitude(latitude.toFixed(6));
     setCurrentLongitude(longitude.toFixed(6));
-    setStartText(`${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
+    setStartText("Current location");
     setActiveSearch(null);
     const selectedRoute = routeOptionsRef.current.find((route) => route.id === selectedRouteIdRef.current);
     if (navigationActiveRef.current && selectedRoute) {
@@ -423,27 +507,11 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     });
   };
 
-  const editCurrentCoordinate = (setter: (value: string) => void, value: string) => {
-    clearRoutePlan();
-    stopTracking();
-    setLocation(null);
-    setStartText("Pinned starting point");
-    setter(value);
-    setPreviewRoute(null);
-  };
-
   const calculateRoutes = async (
     origin: DeviceLocationCoordinate,
     destination: DeviceLocationCoordinate,
     preferredRouteId?: string | null,
   ): Promise<boolean> => {
-    if (travelMode !== "driving") {
-      setRouteOptions([]);
-      setSelectedRouteId(null);
-      setPreviewRoute(null);
-      setRouteError("The public OSRM routing profile supports driving routes only. Select Driving to calculate a route.");
-      return false;
-    }
     const requestId = routingRequestId.current + 1;
     routingRequestId.current = requestId;
     routingController.current?.abort();
@@ -503,7 +571,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     }
     const requestId = trackingRequestId.current + 1;
     trackingRequestId.current = requestId;
-    const isCurrentRequest = () => requestId === trackingRequestId.current && visible;
+    const isCurrentRequest = () => requestId === trackingRequestId.current && screenPresented;
     setBusy(true);
     setError("");
     setPermissionBlocked(false);
@@ -536,6 +604,14 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
           preferredRouteId,
         );
         if (!isCurrentRequest() || !routeReady) return null;
+        const selectedRoute = routeOptionsRef.current.find((route) => route.id === selectedRouteIdRef.current);
+        if (!selectedRoute) return null;
+        const progress = getNavigationProgress(selectedRoute, {
+          latitude: initial.coords.latitude,
+          longitude: initial.coords.longitude,
+        }, 0);
+        progressIndexRef.current = progress.nearestIndex;
+        setNavigationProgress(progress);
         navigationActiveRef.current = true;
         setNavigationActive(true);
       }
@@ -584,12 +660,12 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   calculateRoutesRef.current = calculateRoutes;
 
   useEffect(() => {
-    if (!visible) return;
+    if (!screenPresented) return;
     void startTrackingRef.current();
-  }, [visible]);
+  }, [screenPresented]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!screenPresented) return;
     let cancelled = false;
     const requestId = schoolLocationRequestId.current + 1;
     schoolLocationRequestId.current = requestId;
@@ -601,7 +677,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
       try {
         const schoolCoordinate = schoolLocation && isValidCoordinate(schoolLocation)
           ? schoolLocation
-          : await geocodeSchoolAddress(`${mockData.school.name}, ${mockData.school.address}`);
+          : await geocodeAddress(`${mockData.school.name}, ${mockData.school.address}`);
         if (!isCurrentRequest()) return;
         const schoolName = schoolLocation ? "Child's school" : mockData.school.name;
         setDestinationLatitude(schoolCoordinate.latitude.toFixed(6));
@@ -626,10 +702,10 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
       cancelled = true;
       schoolLocationRequestId.current += 1;
     };
-  }, [visible, schoolLocation]);
+  }, [screenPresented, schoolLocation]);
 
   useEffect(() => {
-    if (!visible || schoolLoading || !schoolDestinationRef.current || !location || !destinationPoint) return;
+    if (!screenPresented || schoolLoading || !schoolDestinationRef.current || !location || !destinationPoint) return;
     const routeKey = `${destinationPoint.latitude.toFixed(6)},${destinationPoint.longitude.toFixed(6)}`;
     if (automaticRouteKeyRef.current === routeKey) return;
     automaticRouteKeyRef.current = routeKey;
@@ -638,7 +714,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
       longitude: location.coords.longitude,
     }, destinationPoint);
   }, [
-    visible,
+    screenPresented,
     schoolLoading,
     location?.coords.latitude,
     location?.coords.longitude,
@@ -651,7 +727,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
       ...currentCoordinates.coordinate,
       accuracy: location?.coords.accuracy ?? null,
       title: startText || "Starting point",
-      detail: tracking ? "Live device location" : "Selected current location",
+      detail: undefined,
     }
     : null;
   const selectDestination = (coordinate: DeviceLocationCoordinate) => {
@@ -664,14 +740,23 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   };
   const routeReady = currentPoint !== null && destinationPoint !== null;
   const displayedRoute = routeOptions.find((route) => route.id === previewRoute) ?? null;
+  const selectedRoute = routeOptions.find((route) => route.id === selectedRouteId) ?? null;
+  const navigationRemainingRatio = selectedRoute && navigationProgress && selectedRoute.distanceMeters > 0
+    ? Math.min(1, navigationProgress.remainingMeters / selectedRoute.distanceMeters)
+    : 1;
+  const navigationRemainingSeconds = navigationProgress && navigationProgress.remainingMeters <= 35
+    ? 0
+    : (selectedRoute?.durationSeconds ?? 0) * navigationRemainingRatio;
+  const nextManeuver = selectedRoute && navigationProgress
+    ? selectedRoute.maneuvers.find((maneuver) => maneuver.distanceAlongMeters > navigationProgress.travelledMeters + 15)
+    : undefined;
+  const navigationTurnDistance = nextManeuver && navigationProgress
+    ? Math.max(0, nextManeuver.distanceAlongMeters - navigationProgress.travelledMeters)
+    : navigationProgress?.remainingMeters ?? 0;
 
   const startNavigation = async () => {
     if (!routeReady || !destinationPoint || routeLoading || busy) return;
     setRouteError("");
-    if (travelMode !== "driving") {
-      setRouteError("The public OSRM routing profile supports driving routes only. Select Driving to navigate.");
-      return;
-    }
     if (tracking && location) {
       const preferredRouteId = selectedRouteId;
       const routeCalculated = await calculateRoutes(
@@ -740,75 +825,145 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     }
   };
 
-  const swapLocations = () => {
-    clearRoutePlan();
-    stopTracking();
-    setLocation(null);
-    setStartText(destinationText);
-    setDestinationText(startText);
-    setCurrentLatitude(destinationLatitude);
-    setCurrentLongitude(destinationLongitude);
-    setDestinationLatitude(currentLatitude);
-    setDestinationLongitude(currentLongitude);
-    setPreviewRoute(null);
+  const searchAndEstimate = async () => {
+    setEstimateOpen(true);
+    setBackupNotice("");
+    setRouteError("");
     setActiveSearch(null);
+    try {
+      let origin = currentCoordinates.kind === "valid" ? currentCoordinates.coordinate : null;
+      if (!origin && startText.trim().toLowerCase() === "current location" && locationRef.current) {
+        origin = {
+          latitude: locationRef.current.coords.latitude,
+          longitude: locationRef.current.coords.longitude,
+        };
+      }
+      if (!origin && startText.trim()) {
+        origin = await geocodeAddress(startText.trim());
+        setCurrentLatitude(origin.latitude.toFixed(6));
+        setCurrentLongitude(origin.longitude.toFixed(6));
+      }
+      if (!origin && locationRef.current) {
+        origin = {
+          latitude: locationRef.current.coords.latitude,
+          longitude: locationRef.current.coords.longitude,
+        };
+      }
+      let destination = destinationPoint;
+      if (!destination && destinationText.trim()) {
+        destination = await geocodeAddress(destinationText.trim());
+        setDestinationLatitude(destination.latitude.toFixed(6));
+        setDestinationLongitude(destination.longitude.toFixed(6));
+      }
+      if (!origin || !destination) {
+        setRouteError("Enter or select both a starting point and destination to calculate an estimate.");
+        return;
+      }
+      if (!startText.trim()) setStartText("Current location");
+      await calculateRoutes(origin, destination, selectedRouteId);
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : "Unknown address lookup error.";
+      setRouteError(`Unable to find one of these locations. ${reason}`);
+    }
+  };
+
+  const closeEstimate = () => {
+    setEstimateOpen(false);
+    if (autoPresented) setAutoPresented(false);
+  };
+
+  const closeScreen = () => {
+    closeEstimate();
+    stopNavigation();
+    onClose();
+  };
+
+  const activateBackup = async () => {
+    setBackupNotice("");
+    try {
+      const activated = await requestBackupPickup();
+      setBackupNotice(activated
+        ? backupRequest.simulated
+          ? "Backup pickup preview activated. No helper was contacted."
+          : "Backup pickup request sent."
+        : "Unable to activate backup pickup. Check the pickup plan and try again.");
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : "Unknown backup request error.";
+      setBackupNotice(`Unable to activate backup pickup. ${reason}`);
+    }
   };
 
   const destinationSuggestions = activeSearch ? placesForSearch(activeSearch) : [];
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose} statusBarTranslucent>
+    <Modal visible={screenPresented} animationType="slide" onRequestClose={closeScreen} statusBarTranslucent>
       <View style={{ flex: 1, backgroundColor: colors.background, paddingTop: insets.top }}>
-        <View style={{ minHeight: 54, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-          <View>
-            <T s={1.15} w={800}>Plan a route</T>
-            <T s={0.78} c="muted">{tracking ? "Live location active" : "Route preview"}</T>
+        {navigationActive ? (
+          <View style={{ minHeight: 86, paddingHorizontal: 16, paddingVertical: 12, flexDirection: "row", alignItems: "center", gap: 14, backgroundColor: colors.primary }}>
+            <View style={{ width: 68, alignItems: "center", gap: 2 }}>
+              <MaterialCommunityIcons
+                name={nextManeuver?.modifier?.includes("left") ? "arrow-left" : nextManeuver?.modifier?.includes("right") ? "arrow-right" : "arrow-up"}
+                size={28}
+                color={colors.onPrimary}
+              />
+              <T s={0.75} w={700} c={colors.onPrimary}>in {formatDistance(navigationTurnDistance)}</T>
+            </View>
+            <View style={{ flex: 1 }}>
+              <T s={1} w={800} c={colors.onPrimary} lh={1.25}>
+                {navigationProgress && navigationProgress.remainingMeters <= 35
+                  ? "Arrive at destination"
+                  : nextManeuver?.instruction ?? "Continue to destination"}
+              </T>
+            </View>
           </View>
-          <Press onPress={onClose} label="Close my location" style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-            <Icon name="x" size={20} color={colors.ink} stroke={2} />
-          </Press>
-        </View>
+        ) : (
+          <View style={{ minHeight: 72, paddingHorizontal: 10, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Input
+              accessibilityLabel="Starting point"
+              value={startText}
+              onFocus={() => setActiveSearch("start")}
+              onChangeText={(value) => editPlaceText("start", value)}
+              placeholder="Current location"
+              returnKeyType="search"
+              onSubmitEditing={() => void searchAndEstimate()}
+              style={{ flex: 1, minWidth: 0, width: 0, minHeight: 48, paddingHorizontal: 9, borderRadius: 12, fontSize: 14 }}
+            />
+            <Input
+              accessibilityLabel="Destination"
+              value={destinationText}
+              onFocus={() => setActiveSearch("destination")}
+              onChangeText={(value) => editPlaceText("destination", value)}
+              placeholder="Destination"
+              returnKeyType="search"
+              onSubmitEditing={() => void searchAndEstimate()}
+              style={{ flex: 1, minWidth: 0, width: 0, minHeight: 48, paddingHorizontal: 9, borderRadius: 12, fontSize: 14 }}
+            />
+            <Press
+              onPress={() => void searchAndEstimate()}
+              label="Search route and show pickup estimate"
+              disabled={routeLoading}
+              style={{ width: 44, height: 48, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: colors.primary }}
+            >
+              <MaterialCommunityIcons name="magnify" size={24} color={colors.onPrimary} />
+            </Press>
+            <Press
+              onPress={closeScreen}
+              label="Close route planner"
+              style={{ width: 36, height: 48, alignItems: "center", justifyContent: "center" }}
+            >
+              <Icon name="x" size={20} color={colors.ink} stroke={2} />
+            </Press>
+          </View>
+        )}
 
-        <ScrollView
-          style={{ flex: 1 }}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
-          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) }}
-        >
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ flexDirection: "row", gap: 8, paddingHorizontal: 16, paddingVertical: 10 }}
-          accessibilityLabel="Transportation modes"
-        >
-          {TRAVEL_MODES.map((mode) => {
-            const selected = travelMode === mode.id;
-            return (
-              <Press
-                key={mode.id}
-                onPress={() => {
-                  clearRoutePlan();
-                  setTravelMode(mode.id);
-                  setPreviewRoute(null);
-                }}
-                label={`${mode.label} travel mode`}
-                state={{ selected }}
-                style={{
-                  minWidth: 72, minHeight: 58, paddingHorizontal: 10, borderRadius: 14,
-                  alignItems: "center", justifyContent: "center", gap: 3,
-                  backgroundColor: selected ? colors.primarySoft : colors.card,
-                  borderWidth: 1, borderColor: selected ? colors.primary : colors.line,
-                }}
-              >
-                <MaterialCommunityIcons name={mode.icon} size={21} color={selected ? colors.primaryInk : colors.muted} />
-                <T s={0.68} w={selected ? 700 : 600} c={selected ? colors.primaryInk : "muted"}>{mode.label}</T>
-              </Press>
-            );
-          })}
-        </ScrollView>
-
-        <View style={{ height: 220, minHeight: 180, marginHorizontal: 12, borderRadius: 18, overflow: "hidden", backgroundColor: colors.map }}>
-          {currentPoint || destinationPoint ? (
+        <View style={{ flex: 1, minHeight: 240, marginHorizontal: navigationActive ? 0 : 12, marginBottom: navigationActive ? 0 : 8, borderRadius: navigationActive ? 0 : 18, overflow: "hidden", backgroundColor: colors.map }}>
+          {Platform.OS === "web" ? (
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 8, backgroundColor: colors.map }}>
+              <MaterialCommunityIcons name="map-outline" size={34} color={colors.primary} />
+              <T s={0.92} w={700} align="center">Map preview</T>
+              <T s={0.8} c="muted" align="center">Interactive map and route drawing are available in the iOS and Android app.</T>
+            </View>
+          ) : currentPoint || destinationPoint ? (
             <DeviceLocationMap
               point={currentPoint}
               destination={destinationPoint}
@@ -824,45 +979,38 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
               <Icon name="look" size={34} color={colors.primary} stroke={1.8} />
               <T w={700} align="center">{schoolLoading ? "Finding your location and the school" : "Choose a starting point and destination"}</T>
               <T s={0.88} c="muted" align="center" lh={1.4}>
-                {schoolLoading ? "Using the saved school details to prepare your route." : "The route map appears when both points are set."}
+                {schoolLoading ? "Preparing the pickup route." : "The route map appears when both points are set."}
               </T>
             </View>
           )}
+          {navigationActive && Platform.OS !== "web" ? (
+            <View pointerEvents="none" style={{ position: "absolute", left: "50%", top: "50%", width: 42, height: 42, marginLeft: -21, marginTop: -21, borderRadius: 21, alignItems: "center", justifyContent: "center", backgroundColor: colors.primary, borderWidth: 3, borderColor: colors.card, elevation: 5 }}>
+              <MaterialCommunityIcons name="car" size={23} color={colors.onPrimary} />
+            </View>
+          ) : null}
         </View>
 
-        <View style={{ paddingHorizontal: 16, paddingTop: 14, gap: 12 }}>
-          <View style={{ gap: 8 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-              <View style={{ flex: 1, gap: 8 }}>
-                <Input
-                  accessibilityLabel="Starting point"
-                  value={startText}
-                  onFocus={() => setActiveSearch("start")}
-                  onChangeText={(value) => editPlaceText("start", value)}
-                  placeholder="Starting point or current location"
-                  returnKeyType="search"
-                />
-                <Input
-                  accessibilityLabel="Destination"
-                  value={destinationText}
-                  onFocus={() => setActiveSearch("destination")}
-                  onChangeText={(value) => editPlaceText("destination", value)}
-                  placeholder="Destination (e.g. Kajang, Selangor)"
-                  returnKeyType="search"
-                />
-              </View>
-              <Press
-                onPress={swapLocations}
-                label="Swap starting point and destination"
-                style={{
-                  width: 46, height: 46, borderRadius: 23, alignItems: "center", justifyContent: "center",
-                  backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line,
-                }}
-              >
-                <Icon name="swap" size={21} color={colors.primary} />
-              </Press>
+        {navigationActive ? (
+          <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: Math.max(insets.bottom, 14), flexDirection: "row", alignItems: "center", gap: 16, backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.line }}>
+            <View style={{ flex: 1 }}>
+              <T s={0.72} w={700} c="muted">ETA</T>
+              <T s={1.2} w={800}>{navigationProgress && navigationProgress.remainingMeters <= 35 ? "Arrived" : formatNavigationEta(navigationRemainingSeconds)}</T>
             </View>
-
+            <View style={{ flex: 1 }}>
+              <T s={0.72} w={700} c="muted">REMAINING</T>
+              <T s={1.2} w={800}>{formatDistance(navigationProgress?.remainingMeters ?? selectedRoute?.distanceMeters ?? 0)}</T>
+            </View>
+            <Btn kind="o" sm color={colors.danger} onPress={stopNavigation} label="Exit active navigation">
+              Exit
+            </Btn>
+          </View>
+        ) : (
+          <ScrollView
+            style={{ flexGrow: 0, maxHeight: "48%" }}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+            contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: Math.max(insets.bottom, 18), gap: 12 }}
+          >
             {activeSearch ? (
               <View style={{ borderRadius: 14, overflow: "hidden", borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card }}>
                 {destinationSuggestions.length > 0 ? destinationSuggestions.map((place) => (
@@ -877,244 +1025,209 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
                   </Press>
                 )) : (
                   <View style={{ padding: 12 }}>
-                    <T s={0.82} c="muted">No demo places match. Choose a point on the map or enter coordinates.</T>
+                    <T s={0.82} c="muted">Type an address and tap search, or choose a destination on the map.</T>
                   </View>
                 )}
               </View>
             ) : null}
 
-            <Press
-              onPress={() => void startTracking()}
-              disabled={busy || tracking}
-              label="Use this device's current GPS location"
-              style={{ minHeight: 42, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 4 }}
-            >
-              <Icon name="look" size={18} color={colors.primary} />
-              <T s={0.86} w={700} c={colors.primaryInk}>{busy ? "Finding your location..." : tracking ? "Using live device location" : "Use current location"}</T>
-            </Press>
-            {schoolLoading ? (
-              <T s={0.78} c="muted">Finding {mockData.school.name} from the saved school address...</T>
+            {schoolLoading ? <T s={0.78} c="muted">Finding {mockData.school.name} from the saved school details...</T> : null}
+            {error ? (
+              <View style={{ gap: 8 }}>
+                <T s={0.88} c={colors.danger} lh={1.35}>{error}</T>
+                {permissionBlocked && Platform.OS !== "web" ? <Btn kind="o" onPress={() => void Linking.openSettings()}>Open phone settings</Btn> : null}
+              </View>
             ) : null}
-          </View>
+            {routeError ? <T s={0.84} c={colors.danger}>{routeError}</T> : null}
 
-          <Press
-            onPress={() => setShowCoordinates((shown) => !shown)}
-            label={showCoordinates ? "Hide coordinate entry" : "Enter coordinates manually"}
-            style={{ minHeight: 40, justifyContent: "center" }}
-          >
-            <T s={0.82} w={700} c={colors.primaryInk}>{showCoordinates ? "Hide coordinate entry" : "Enter coordinates manually"}</T>
-          </Press>
-          {showCoordinates ? (
-            <View style={{ gap: 8 }}>
-              <T s={0.82} c="muted">Decimal coordinates: latitude -90 to 90, longitude -180 to 180.</T>
-              <View style={{ flexDirection: "row", gap: 8 }}>
-                <View style={{ flex: 1 }}>
-                  <Input accessibilityLabel="Starting latitude" value={currentLatitude} onChangeText={(value) => editCurrentCoordinate(setCurrentLatitude, value)} placeholder="Start latitude" keyboardType="numbers-and-punctuation" maxLength={16} />
+            {routeReady ? (
+              <View style={{ gap: 10, paddingTop: 4 }}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <T s={1.05} w={800}>Route options</T>
+                  <View style={{ backgroundColor: colors.warning, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999 }}>
+                    <T s={0.66} w={700} c={colors.warningInk}>OSRM</T>
+                  </View>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Input accessibilityLabel="Starting longitude" value={currentLongitude} onChangeText={(value) => editCurrentCoordinate(setCurrentLongitude, value)} placeholder="Start longitude" keyboardType="numbers-and-punctuation" maxLength={16} />
-                </View>
-              </View>
-              <View style={{ flexDirection: "row", gap: 8 }}>
-                <View style={{ flex: 1 }}>
-                  <Input accessibilityLabel="Destination latitude" value={destinationLatitude} onChangeText={(value) => { clearRoutePlan(); setDestinationLatitude(value); setDestinationText("Pinned destination"); setPreviewRoute(null); }} placeholder="End latitude" keyboardType="numbers-and-punctuation" maxLength={16} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Input accessibilityLabel="Destination longitude" value={destinationLongitude} onChangeText={(value) => { clearRoutePlan(); setDestinationLongitude(value); setDestinationText("Pinned destination"); setPreviewRoute(null); }} placeholder="End longitude" keyboardType="numbers-and-punctuation" maxLength={16} />
-                </View>
-              </View>
-              {currentCoordinates.kind === "invalid" ? <T s={0.82} c={colors.danger}>Enter a valid starting latitude and longitude.</T> : null}
-              {destinationCoordinates.kind === "invalid" ? <T s={0.82} c={colors.danger}>Enter a valid destination latitude and longitude.</T> : null}
-            </View>
-          ) : null}
+                <T s={0.78} c="muted" lh={1.35}>
+                  Driving estimates use public OSRM and OpenStreetMap data. Live traffic and toll data are not provided.
+                </T>
+                <Btn
+                  kind="p"
+                  icon="drive"
+                  onPress={() => {
+                    if (currentPoint && destinationPoint) void calculateRoutes(currentPoint, destinationPoint);
+                  }}
+                  disabled={routeLoading || busy || navigationActive}
+                  loading={routeLoading}
+                >
+                  {routeLoading ? "Calculating route..." : "Refresh estimate"}
+                </Btn>
 
-          {location ? (
-            <View style={{ gap: 10 }}>
-              <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 12 }}>
-                <View style={{ flex: 1 }}>
-                  <T s={0.72} c="muted">ACCURACY</T>
-                  <T s={0.9} w={700}>{location.coords.accuracy === null ? "Unknown" : `About ${Math.round(location.coords.accuracy)} m`}</T>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <T s={0.72} c="muted">UPDATED</T>
-                  <T s={0.9} w={700}>{new Date(location.timestamp).toLocaleTimeString()}</T>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <T s={0.72} c="muted">STATUS</T>
-                  <T s={0.9} w={700} c={tracking ? colors.success : colors.muted}>{tracking ? "Live" : "Stopped"}</T>
-                </View>
-              </View>
-              <View style={{ flexDirection: "row", gap: 12 }}>
-                <View style={{ flex: 1 }}>
-                  <T s={0.72} c="muted">SPEED</T>
-                  <T s={0.9} w={700}>{formatSpeed(location.coords.speed)}</T>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <T s={0.72} c="muted">HEADING</T>
-                  <T s={0.9} w={700}>{formatHeading(location.coords.heading)}</T>
-                </View>
-              </View>
-            </View>
-          ) : null}
-
-          {error ? (
-            <View style={{ gap: 8 }}>
-              <T s={0.88} c={colors.danger} lh={1.35}>{error}</T>
-              {permissionBlocked && Platform.OS !== "web" ? <Btn kind="o" onPress={() => void Linking.openSettings()}>Open phone settings</Btn> : null}
-            </View>
-          ) : null}
-
-          {routeReady ? (
-            <View style={{ gap: 10, paddingTop: 4 }}>
-              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                <T s={1.05} w={800}>Route options</T>
-                <View style={{ backgroundColor: colors.warning, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999 }}>
-                  <T s={0.66} w={700} c={colors.warningInk}>OSRM</T>
-                </View>
-              </View>
-              <T s={0.78} c="muted" lh={1.35}>
-                Routes use the public OSRM driving service and OpenStreetMap data. Live traffic and toll data are not provided.
-              </T>
-              <Btn
-                kind="p"
-                icon="drive"
-                onPress={() => {
-                  if (currentPoint && destinationPoint) void calculateRoutes(currentPoint, destinationPoint);
-                }}
-                disabled={routeLoading || busy || navigationActive}
-                loading={routeLoading}
-              >
-                {routeLoading ? "Calculating route..." : "Find driving routes"}
-              </Btn>
-              {travelMode !== "driving" ? (
-                <T s={0.82} c={colors.warningInk}>The selected public OSRM service supports driving routes only. Select Driving to calculate.</T>
-              ) : null}
-              {routeError ? <T s={0.84} c={colors.danger}>{routeError}</T> : null}
-
-              {routeOptions.map((route) => {
-                const selected = selectedRouteId === route.id;
-                const expanded = expandedRoute === route.id;
-                const remainingRatio = route.distanceMeters > 0 && navigationProgress && selected
-                  ? Math.min(1, navigationProgress.remainingMeters / route.distanceMeters)
-                  : 1;
-                const remainingSeconds = navigationProgress && selected && navigationProgress.remainingMeters <= 35
-                  ? 0
-                  : route.durationSeconds * remainingRatio;
-                return (
-                  <View
-                    key={route.id}
-                    style={{
-                      gap: 8, padding: 13, borderRadius: 16,
-                      backgroundColor: colors.card,
-                      borderWidth: selected ? 2 : 1,
-                      borderColor: selected ? colors.primary : colors.line,
-                    }}
-                  >
-                    <Press
-                      onPress={() => {
-                        if (navigationActive) return;
-                        selectedRouteIdRef.current = route.id;
-                        setSelectedRouteId(route.id);
-                        setPreviewRoute(route.id);
-                        setNavigationProgress(null);
-                        progressIndexRef.current = 0;
+                {routeOptions.map((route) => {
+                  const selected = selectedRouteId === route.id;
+                  const expanded = expandedRoute === route.id;
+                  const remainingRatio = route.distanceMeters > 0 && navigationProgress && selected
+                    ? Math.min(1, navigationProgress.remainingMeters / route.distanceMeters)
+                    : 1;
+                  const remainingSeconds = navigationProgress && selected && navigationProgress.remainingMeters <= 35
+                    ? 0
+                    : route.durationSeconds * remainingRatio;
+                  return (
+                    <View
+                      key={route.id}
+                      style={{
+                        gap: 8, padding: 13, borderRadius: 16,
+                        backgroundColor: colors.card,
+                        borderWidth: selected ? 2 : 1,
+                        borderColor: selected ? colors.primary : colors.line,
                       }}
-                      disabled={navigationActive}
-                      label={`Select route option ${route.roadSummary}`}
-                      style={{ gap: 4 }}
                     >
-                      <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-                        <T s={1.15} w={800}>{formatDuration(remainingSeconds)}</T>
-                        <T s={0.88} w={700} c="muted">{formatDistance(navigationProgress && selected ? navigationProgress.remainingMeters : route.distanceMeters)}</T>
-                      </View>
-                      <T s={0.82} w={700}>{route.roadSummary}</T>
-                      <T s={0.78} c="muted">
-                        {navigationProgress && selected && navigationProgress.remainingMeters <= 35
-                          ? "Arrived"
-                          : `ETA ${formatEta(navigationProgress && selected ? remainingSeconds : route.durationSeconds)}`}
-                        {" · Toll and live traffic info unavailable"}
-                      </T>
-                    </Press>
-                    {expanded ? (
-                      <T s={0.78} c="muted" lh={1.4}>
-                        Route distance and estimated duration are from OSRM. Turn-by-turn guidance, traffic, and toll pricing are not included.
-                      </T>
-                    ) : null}
-                    <View style={{ flexDirection: "row", gap: 8 }}>
-                      <Btn
-                        kind="o"
-                        sm
-                        flex
-                        onPress={() => setExpandedRoute(expanded ? null : route.id)}
-                        label={`${expanded ? "Hide" : "Show"} route details`}
-                      >
-                        {expanded ? "Hide details" : "Details"}
-                      </Btn>
-                      <Btn
-                        kind={selected ? "s" : "o"}
-                        sm
-                        flex
-                        disabled={navigationActive}
+                      <Press
                         onPress={() => {
+                          if (navigationActive) return;
                           selectedRouteIdRef.current = route.id;
                           setSelectedRouteId(route.id);
                           setPreviewRoute(route.id);
                           setNavigationProgress(null);
                           progressIndexRef.current = 0;
                         }}
-                        label="Preview route on map"
+                        disabled={navigationActive}
+                        label={`Select route option ${route.roadSummary}`}
+                        style={{ gap: 4 }}
                       >
-                        {selected ? "Previewing" : "Preview"}
-                      </Btn>
+                        <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+                          <T s={1.15} w={800}>{formatDuration(remainingSeconds)}</T>
+                          <T s={0.88} w={700} c="muted">{formatDistance(navigationProgress && selected ? navigationProgress.remainingMeters : route.distanceMeters)}</T>
+                        </View>
+                        <T s={0.82} w={700}>{route.roadSummary}</T>
+                        <T s={0.78} c="muted">
+                          {navigationProgress && selected && navigationProgress.remainingMeters <= 35
+                            ? "Arrived"
+                            : `ETA ${formatEta(navigationProgress && selected ? remainingSeconds : route.durationSeconds)}`}
+                          {" · Toll and live traffic info unavailable"}
+                        </T>
+                      </Press>
+                      {expanded ? (
+                        <T s={0.78} c="muted" lh={1.4}>
+                          Road names and turn prompts are derived from OSRM route steps. Live traffic, toll pricing, and voice guidance are not provided.
+                        </T>
+                      ) : null}
+                      <View style={{ flexDirection: "row", gap: 8 }}>
+                        <Btn kind="o" sm flex onPress={() => setExpandedRoute(expanded ? null : route.id)} label={`${expanded ? "Hide" : "Show"} route details`}>
+                          {expanded ? "Hide details" : "Details"}
+                        </Btn>
+                        <Btn
+                          kind={selected ? "s" : "o"}
+                          sm
+                          flex
+                          disabled={navigationActive}
+                          onPress={() => {
+                            selectedRouteIdRef.current = route.id;
+                            setSelectedRouteId(route.id);
+                            setPreviewRoute(route.id);
+                            setNavigationProgress(null);
+                            progressIndexRef.current = 0;
+                          }}
+                          label="Preview route on map"
+                        >
+                          {selected ? "Previewing" : "Preview"}
+                        </Btn>
+                      </View>
+                      {selected ? (
+                        <Btn kind="p" icon="drive" onPress={() => void startNavigation()} disabled={routeLoading || busy} loading={busy}>
+                          {busy ? "Starting GPS..." : "Start navigation"}
+                        </Btn>
+                      ) : null}
                     </View>
-                    {selected && !navigationActive ? (
-                      <Btn kind="p" icon="drive" onPress={() => void startNavigation()} disabled={routeLoading || busy} loading={busy}>
-                        {busy ? "Starting GPS..." : "Go"}
-                      </Btn>
+                  );
+                })}
+                {navigationProgress && !navigationActive ? (
+                  <View style={{ gap: 5, padding: 12, borderRadius: 14, backgroundColor: colors.primarySoft }}>
+                    <T s={0.9} w={700} c={colors.primaryInk}>
+                      {navigationProgress.remainingMeters <= 35 ? "Arrived at destination" : "Navigation stopped"}
+                    </T>
+                    {navigationProgress.deviationMeters > 100 ? (
+                      <T s={0.78} c={colors.warningInk}>You appear away from the planned route. Refresh the estimate from your current location.</T>
                     ) : null}
                   </View>
-                );
-              })}
-              {navigationProgress ? (
-                <View style={{ gap: 5, padding: 12, borderRadius: 14, backgroundColor: colors.primarySoft }}>
-                  <T s={0.9} w={700} c={colors.primaryInk}>
-                    {navigationProgress.remainingMeters <= 35
-                      ? "Arrived at destination"
-                      : navigationActive
-                        ? `On route · ${formatDistance(navigationProgress.remainingMeters)} remaining`
-                        : "Navigation stopped"}
-                  </T>
-                  {navigationActive && navigationProgress.deviationMeters > 100 ? (
-                    <T s={0.78} c={colors.warningInk}>You appear away from the planned route. Stop and recalculate from your current location.</T>
-                  ) : null}
-                </View>
-              ) : null}
-              {navigationActive ? (
-                <Btn kind="o" icon="cantx" color={colors.danger} onPress={stopNavigation} label="Stop navigation and GPS tracking">
-                  Stop navigation
-                </Btn>
-              ) : null}
-              <T s={0.72} c="muted">Routing by OSRM · Map data © OpenStreetMap contributors</T>
-            </View>
-          ) : (
-            <T s={0.82} c="muted">Choose a start and destination before requesting a driving route.</T>
-          )}
+                ) : null}
+                <T s={0.72} c="muted">Routing by OSRM · Map data © OpenStreetMap contributors</T>
+              </View>
+            ) : (
+              <T s={0.82} c="muted">Set a starting point and destination to see a route estimate.</T>
+            )}
+            <TripSharing
+              visible={screenPresented}
+              tracking={tracking}
+              point={tracking && location ? {
+                latitude: location.coords.latitude,
+                longitude: location.coords.longitude,
+                accuracy: location.coords.accuracy,
+              } : null}
+            />
+          </ScrollView>
+        )}
 
-          {tracking && !navigationActive ? <Btn kind="o" icon="cantx" color={colors.danger} onPress={stopTracking} label="Stop live location updates">Stop GPS</Btn> : null}
-          <T s={0.76} c="muted" align="center" lh={1.35}>
-            GPS updates run only while this screen is open. Route matching and arrival estimates are approximate; this screen does not provide turn-by-turn voice guidance. {Platform.OS === "web" ? "Interactive map selection is available in the native app." : "Tap the map to set a destination."}
-          </T>
-          <TripSharing
-            visible={visible}
-            tracking={tracking}
-            point={tracking && location ? {
-              latitude: location.coords.latitude,
-              longitude: location.coords.longitude,
-              accuracy: location.coords.accuracy,
-            } : null}
-          />
-        </View>
-        </ScrollView>
+        {estimateOpen ? (
+          <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center", paddingHorizontal: 18, paddingBottom: Math.max(insets.bottom, 18), backgroundColor: colors.scrim }}>
+            <View style={{ width: "100%", maxWidth: 440, padding: 20, borderRadius: 22, backgroundColor: colors.card, gap: 16, elevation: 12 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                <T s={1.15} w={800}>Pickup estimate</T>
+                <Press onPress={closeEstimate} label="Close pickup estimate" style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
+                  <Icon name="x" size={20} color={colors.ink} stroke={2} />
+                </Press>
+              </View>
+
+              <View style={{ minHeight: 112, alignItems: "center", justifyContent: "center", padding: 16, gap: 6, borderRadius: 16, backgroundColor: colors.primarySoft }}>
+                {routeLoading || busy || schoolLoading ? (
+                  <T s={0.98} w={700} c={colors.primaryInk} align="center">Calculating estimate...</T>
+                ) : selectedRoute ? (
+                  <>
+                    <T s={1.5} w={800} c={colors.primaryInk} align="center">
+                      {formatDistance(selectedRoute.distanceMeters)} · {formatDuration(selectedRoute.durationSeconds)}
+                    </T>
+                    <T s={0.88} w={700} c={colors.primaryInk} align="center">ETA {formatEta(selectedRoute.durationSeconds)}</T>
+                  </>
+                ) : (
+                  <T s={0.98} w={700} c={colors.primaryInk} align="center">Estimate location will show here</T>
+                )}
+              </View>
+
+              {routeError ? <T s={0.82} c={colors.danger} lh={1.35}>{routeError}</T> : null}
+              {backupNotice ? <T s={0.82} c={colors.primaryInk} lh={1.35}>{backupNotice}</T> : null}
+              {backupError ? <T s={0.82} c={colors.danger} lh={1.35}>{backupError}</T> : null}
+
+              <View style={{ flexDirection: "row", gap: 10 }}>
+                <Btn
+                  kind="p"
+                  flex
+                  onPress={() => {
+                    setEstimateOpen(false);
+                    void startNavigation();
+                  }}
+                  disabled={!routeReady || routeLoading || busy || !selectedRoute}
+                  loading={busy}
+                  label="Start navigation to the school"
+                >
+                  GO
+                </Btn>
+                <Btn
+                  kind="o"
+                  flex
+                  onPress={() => void activateBackup()}
+                  disabled={backupBusy}
+                  loading={backupBusy}
+                  label="Activate backup pickup"
+                >
+                  activate back up
+                </Btn>
+              </View>
+
+              <T s={0.82} w={800} c="muted" align="center" up>PICK UP "{mockData.child.name}" NOW</T>
+              <T s={0.7} c="muted" align="center">Route and arrival estimates are approximate; live traffic is not included.</T>
+            </View>
+          </View>
+        ) : null}
       </View>
     </Modal>
   );
