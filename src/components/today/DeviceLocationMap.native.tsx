@@ -1,4 +1,5 @@
 import MapView, { Circle, Marker, Polyline } from "react-native-maps";
+import { shouldCenterHeader } from "./mapCamera";
 import type { Region } from "react-native-maps";
 import { useEffect, useRef, useState } from "react";
 
@@ -35,21 +36,27 @@ export function DeviceLocationMap({
   navigationActive,
   onSelectDestination,
   previewMode,
+  cameraMode = "automatic",
+  recenterRequest = 0,
+  additionalPoints,
 }: DeviceLocationMapProps & { previewMode?: TravelMode }) {
   const { theme } = useAppContext();
   const mapRef = useRef<MapView | null>(null);
+  const centered = useRef(false);
+  const explored = useRef(false);
+  const lastRecenter = useRef(recenterRequest);
   const [mapReady, setMapReady] = useState(false);
 
   useEffect(() => {
-    if (!mapReady || !routeCoordinates || routeCoordinates.length < 2) return;
+    if (cameraMode === "explore" || !mapReady || !routeCoordinates || routeCoordinates.length < 2) return;
     mapRef.current?.fitToCoordinates([...routeCoordinates], {
       animated: true,
       edgePadding: { top: 48, right: 48, bottom: 48, left: 48 },
     });
-  }, [mapReady, routeCoordinates]);
+  }, [cameraMode, mapReady, routeCoordinates]);
 
   useEffect(() => {
-    if (!mapReady || (routeCoordinates && routeCoordinates.length > 1)) return;
+    if (cameraMode === "explore" || !mapReady || (routeCoordinates && routeCoordinates.length > 1)) return;
     const coordinates = [point, destination].filter((coordinate) => coordinate !== null && coordinate !== undefined);
     if (coordinates.length === 0) return;
     if (coordinates.length === 1) {
@@ -66,23 +73,33 @@ export function DeviceLocationMap({
       animated: true,
       edgePadding: { top: 48, right: 48, bottom: 48, left: 48 },
     });
-  }, [mapReady, routeCoordinates, point?.latitude, point?.longitude, destination?.latitude, destination?.longitude]);
+  }, [cameraMode, mapReady, routeCoordinates, point?.latitude, point?.longitude, destination?.latitude, destination?.longitude]);
 
   useEffect(() => {
-    if (!mapReady || !navigationActive || !point) return;
+    if (cameraMode === "explore" || !mapReady || !navigationActive || !point) return;
     mapRef.current?.animateToRegion({
       latitude: point.latitude,
       longitude: point.longitude,
       latitudeDelta: 0.008,
       longitudeDelta: 0.008,
     }, 500);
-  }, [mapReady, navigationActive, point?.latitude, point?.longitude]);
+  }, [cameraMode, mapReady, navigationActive, point?.latitude, point?.longitude]);
+
+  useEffect(() => {
+    if (cameraMode !== "explore" || !mapReady || !point) return;
+    if (shouldCenterHeader(centered.current, explored.current, lastRecenter.current, recenterRequest)) {
+      mapRef.current?.animateToRegion({ latitude: point.latitude, longitude: point.longitude, latitudeDelta: 0.012, longitudeDelta: 0.012 }, 350);
+      centered.current = true;
+    }
+    lastRecenter.current = recenterRequest;
+  }, [cameraMode, mapReady, point?.latitude, point?.longitude, recenterRequest]);
 
   return (
     <MapView
       ref={mapRef}
       style={{ flex: 1 }}
-      initialRegion={initialRegion({ point, destination })}
+      initialRegion={initialRegion({ point, destination: cameraMode === "explore" && point ? null : destination })}
+      onPanDrag={() => { explored.current = true; }}
       onMapReady={() => setMapReady(true)}
       onPress={(event) => onSelectDestination?.(event.nativeEvent.coordinate)}
       userInterfaceStyle={theme.isDark ? "dark" : "light"}
@@ -105,9 +122,11 @@ export function DeviceLocationMap({
             coordinate={{ latitude: point.latitude, longitude: point.longitude }}
             title={point.title}
             description={point.detail}
+            pinColor="#218975"
           />
         </>
       ) : null}
+      {additionalPoints?.map(extra => <Marker key={extra.id} coordinate={extra} title={extra.title} description={extra.detail} pinColor="#208AEF" />)}
       {destination ? (
         <Marker coordinate={destination} title={destinationTitle ?? "Destination"} description="Selected destination" pinColor="#B3261E" />
       ) : null}

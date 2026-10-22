@@ -75,19 +75,22 @@ export type StoredChild = { id: string; school: { latitude: number; longitude: n
  * The school's coordinates are optional (supabase/school_location.sql). If that migration has not
  * been applied, or the school has no coordinates, `school` is null and Today says it cannot estimate.
  */
-export async function fetchFirstChild(familyId: string): Promise<StoredChild | null> {
+export async function fetchFirstChild(familyId: string, childId?: string): Promise<StoredChild | null> {
   type Row = { id: string; school_latitude?: number | null; school_longitude?: number | null };
-  let res = await call<Row[]>(() =>
-    supabase.from("children").select("id, school_latitude, school_longitude").eq("family_id", familyId).order("created_at", { ascending: true }).limit(1),
-  );
+  const query = (columns: string) => {
+    let request = supabase.from("children").select(columns).eq("family_id", familyId);
+    if (childId) request = request.eq("id", childId);
+    return request.order("created_at", { ascending: true }).limit(1);
+  };
+  let res = await call<Row[]>(() => query("id, school_latitude, school_longitude") as unknown as PromiseLike<{ data: Row[] | null; error: { message: string } | null }>);
   if (!res.ok) {
     // Column missing (migration not applied yet): fall back to just the id.
     res = await call<Row[]>(() =>
-      supabase.from("children").select("id").eq("family_id", familyId).order("created_at", { ascending: true }).limit(1),
+      query("id") as unknown as PromiseLike<{ data: Row[] | null; error: { message: string } | null }>,
     );
   }
   const row = res.ok ? res.data?.[0] : undefined;
-  if (!row) return null;
+  if (!row || (childId && row.id !== childId)) return null;
   const lat = row.school_latitude;
   const lng = row.school_longitude;
   const valid = typeof lat === "number" && typeof lng === "number" && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;

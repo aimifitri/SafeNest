@@ -8,7 +8,7 @@ import { MapView } from "../shared/MapView";
 import type { MapDot } from "../shared/MapView";
 import { Sheet } from "../shared/Sheet";
 import { askAt, clock } from "../shared/circleEngine";
-import { dismissMinutes, sim } from "../shared/demoSim";
+import { SIM_START, dismissMinutes, sim } from "../shared/demoSim";
 import type { LocationMode } from "../shared/demoSim";
 import { Banner, Btn, LRow, Press, Seg, T, useColors } from "../shared/ui";
 import type { usePickupFlow } from "./usePickupFlow";
@@ -42,7 +42,7 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-export function DemoSheet({ visible, onClose, pf }: { visible: boolean; onClose: () => void; pf: PF }) {
+export function DemoSheet({ visible, onClose, pf, onExited }: { visible: boolean; onClose: () => void; pf: PF; onExited?: () => void }) {
   const { theme } = useAppContext();
   const c = theme.colors;
   const s = pf.demo.state;
@@ -55,7 +55,7 @@ export function DemoSheet({ visible, onClose, pf }: { visible: boolean; onClose:
   const cancellable = !["plan", "committed", "collected"].includes(s.engine.stage);
 
   return (
-    <Sheet visible={visible} onClose={onClose} title="Demo controls" closeLabel="Close demo controls">
+    <Sheet visible={visible} onClose={onClose} onExited={onExited} title="Demo controls" closeLabel="Close demo controls">
       <Banner>Prototype only. A demo clock, a made-up location and made-up answers. Nothing is tracked and nobody is contacted.</Banner>
 
       {pf.realMode ? (
@@ -73,7 +73,7 @@ export function DemoSheet({ visible, onClose, pf }: { visible: boolean; onClose:
           {PRESETS.map((p, i) => (
             <LRow key={p.key} first={i === 0} on={false} a11y={`Set up: ${p.label}`} onPress={() => sim.preset(p.key, env)}>
               <T w={700}>{p.label}</T>
-              <T s={0.84} c="muted" lh={1.35}>{p.detail}</T>
+              <T s={0.84} c="muted" lh={1.35}>{p.key === "late" ? `Now ${clock(env.planDismiss - 30)}. School ends ${clock(env.planDismiss)}. You would arrive ${clock(env.planDismiss + 10)}.` : p.detail}</T>
             </LRow>
           ))}
         </Card>
@@ -157,9 +157,9 @@ export function DemoSheet({ visible, onClose, pf }: { visible: boolean; onClose:
       </Group>
 
       <Group title="Cancel and reset">
-        <T s={0.84} c="muted" lh={1.4}>The travel, arrival and picked-up buttons sit on the Today card at the step they belong to. Resetting lives here only.</T>
+        <T s={0.84} c="muted" lh={1.4}>Restart resets only this selected child's demo to {clock(SIM_START.now)}: clock, location, delay, pickup decisions, replies, journey and dismissed warnings. Saved children and Pickup Plan stay unchanged. Automatic backup and reply settings are kept.</T>
         {cancellable ? <Btn kind="o" onPress={() => { void pf.run("cancel_round"); }}>Cancel and start over</Btn> : null}
-        <Btn kind="o" onPress={() => sim.reset(env)}>Restart demo</Btn>
+        <Btn kind="o" onPress={() => sim.reset(env)}>Restart this child's demo</Btn>
       </Group>
       <T s={0.82} c="muted" align="center" lh={1.4}>Today and Pickup Plan use the same demo state. Circle only manages who can help.</T>
     </Sheet>
@@ -167,7 +167,7 @@ export function DemoSheet({ visible, onClose, pf }: { visible: boolean; onClose:
 }
 
 const PRESETS = [
-  { key: "late", label: "Late, no answer (the 12:30 example)", detail: "Now 12:30. School ends 1:00. You would arrive 1:10." },
+  { key: "late", label: "Late, no answer (10 minutes late)", detail: "Now 12:30. School ends 1:00. You would arrive 1:10." },
   { key: "ontime", label: "On time", detail: "You arrive well before school ends." },
   { key: "nobody", label: "Late, nobody can help", detail: "Everyone declines or does not answer." },
   { key: "no_gps", label: "Phone cannot find its location", detail: "SafeNest cannot tell if you are late." },

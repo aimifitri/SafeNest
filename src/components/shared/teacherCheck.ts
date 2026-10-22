@@ -9,6 +9,14 @@ import type { VerificationState } from "./types";
 type Record = { collector: string | null; state: VerificationState };
 
 let current: Record = { collector: null, state: "notStarted" };
+let scope = "default";
+const scopes = new Map<string, Record>();
+export function selectTeacherScope(next: string) {
+  if (scope === next) return;
+  scopes.set(scope, current); scope = next;
+  current = scopes.get(scope) ?? { collector: null, state: "notStarted" };
+  listeners.forEach(listener => listener());
+}
 const listeners = new Set<() => void>();
 
 export function setTeacherCheck(collector: string | null, state: VerificationState): void {

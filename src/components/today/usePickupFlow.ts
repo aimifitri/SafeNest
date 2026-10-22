@@ -1,4 +1,4 @@
-import { Linking } from "react-native";
+import { AppState, Linking } from "react-native";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppContext } from "../shared/AppContext";
@@ -16,6 +16,7 @@ import type { ActionId, Eta, FlowCircle, FlowJourney, FlowRecipient, PickupFlow 
 import { setTeacherCheck, useTeacherCheck } from "../shared/teacherCheck";
 import { useCircleBroadcast } from "../shared/useCircleBroadcast";
 import { usePickupEta } from "../shared/usePickupEta";
+import { monitoringWindow, pickupStatus, usableEta } from "../shared/pickupStatus";
 import { usePickupJourney } from "../shared/usePickupJourney";
 
 // Gathers every source of pickup facts, hands them to derivePickupFlow() once, and runs the action
@@ -28,9 +29,9 @@ import { usePickupJourney } from "../shared/usePickupJourney";
 const TICK_MS = 15_000;
 const REPORT_EVERY_MS = 5 * 60_000;
 
-export function usePickupFlow() {
+export function usePickupFlow(screenActive = true) {
   const ctx = useAppContext();
-  const { session } = useAuth();
+  const { session, profile } = useAuth();
   const simState = useSim();
   const decision = usePickupDecision();
   const { child, school, household } = useChildSchool();
@@ -42,7 +43,7 @@ export function usePickupFlow() {
 
   const journeyCtl = usePickupJourney(realActive ? ctx.storedChildId : null);
   const circleCtl = useCircleBroadcast(realActive ? ctx.storedChildId : null);
-  const etaCtl = usePickupEta(ctx.schoolLocation, realActive);
+
 
   const caregiver = ctx.selectedCaregiver;
   const weekday = new Date().getDay();
@@ -73,10 +74,19 @@ export function usePickupFlow() {
   // A slow tick so deadlines (12:55) pass on screen even if nothing else changes.
   const [realNow, setRealNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!realActive) return;
+    if (!realActive || !screenActive) return;
     const id = setInterval(() => setRealNow(Date.now()), TICK_MS);
     return () => clearInterval(id);
-  }, [realActive]);
+  }, [realActive, screenActive]);
+
+  const hasLiveJourney = journeyCtl.journey?.state === "started" || journeyCtl.journey?.state === "at_school";
+  const parentAccount = profile?.accountType === "parent";
+  const monitor = screenActive && realActive && parentAccount && ctx.planConfigured && journeyCtl.lastState !== "collected" && journeyCtl.lastState !== "cancelled"
+    && (monitoringWindow(minutesOfDay(realNow), planDismiss) || hasLiveJourney);
+  const etaCtl = usePickupEta(ctx.schoolLocation, monitor, household.pickupScope);
+  useEffect(() => {
+    if (realActive && (journeyCtl.lastState === "collected" || journeyCtl.lastState === "cancelled")) etaCtl.stop();
+  }, [realActive, journeyCtl.lastState]);
 
   // ---- layer inputs
   let nowMs: number;
@@ -101,7 +111,7 @@ export function usePickupFlow() {
     collectorKey = inp.collectorName ?? viewerName;
   } else {
     nowMs = realNow; dismissMin = planDismiss;
-    eta = realMode ? etaCtl.eta : { kind: "checking" };
+    eta = realMode ? usableEta(etaCtl.eta, realNow) : { kind: "checking" };
     parentChoice = decision.choice; leaveAt = decision.leaveAt; simulated = false;
     const live = journeyCtl.journey;
     journey = live
@@ -146,7 +156,7 @@ export function usePickupFlow() {
   const arrivalMin = predictedArrivalMinutes(eta);
   const stage: E.Stage = journey ? "arrived" : circle ? "circle" : parentChoice === "will_collect" ? "committed" : "plan";
   const engineCtx: E.Context = { now: nowMin, dismiss: dismissMin, predictedArrival: arrivalMin, atSchool: false, settings: escalation, graceMinutes: 0 };
-  const shouldAuto = realActive && circleCtl.available === true && E.shouldAutoEscalate({ stage }, engineCtx);
+  const shouldAuto = screenActive && AppState.currentState === "active" && realActive && journeyCtl.lastState !== "collected" && journeyCtl.lastState !== "cancelled" && journeyCtl.ready && monitoringWindow(nowMin, dismissMin) && ctx.planConfigured && circleCtl.available === true && E.shouldAutoEscalate({ stage }, engineCtx);
   const autoFired = useRef<string | null>(null);
   const dayKey = new Date(nowMs).toDateString();
   useEffect(() => {
@@ -166,14 +176,14 @@ export function usePickupFlow() {
   // act when this app is closed. Skipped when the backend upgrade is not there.
   const reportKey = `${parentChoice}|${arrivalMin}|${dismissMin}|${circle ? 1 : 0}|${Math.floor(realNow / REPORT_EVERY_MS)}`;
   useEffect(() => {
-    if (!realActive || !ctx.storedChildId || circleCtl.available !== true || circleCtl.settingsAvailable !== true) return;
+    if (!screenActive || !realActive || journeyCtl.lastState === "collected" || journeyCtl.lastState === "cancelled" || !ctx.planConfigured || !ctx.storedChildId || circleCtl.available !== true || circleCtl.settingsAvailable !== true) return;
     void reportPickupStatus(
       ctx.storedChildId, new Date(atMinutes(nowMs, dismissMin)),
       arrivalMin === null ? null : new Date(atMinutes(nowMs, arrivalMin)),
       parentChoice,
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [realActive, circleCtl.available, circleCtl.settingsAvailable, reportKey]);
+  }, [screenActive, realActive, journeyCtl.lastState, ctx.planConfigured, circleCtl.available, circleCtl.settingsAvailable, reportKey]);
 
   // A declined single-helper request is remembered so the one-at-a-time fallback moves on.
   const declinedId = ctx.backupRequest.state === "declined" ? ctx.backupRequest.helperId : undefined;
@@ -229,7 +239,12 @@ export function usePickupFlow() {
     else setTeacherCheck(collector.name, "awaitingTeacher");
   };
 
+  const status = pickupStatus(eta, nowMin, dismissMin, flow.phase, child.name, collector.name, realActive && journeyCtl.lastState === "cancelled");
   return {
+    statusReady: simActive || (journeyCtl.ready && circleCtl.available === true && !journeyCtl.error && !circleCtl.error),
+    eta, status, nowMs, parentResponded: parentChoice === "will_collect",
+    journeyActive: journey !== null,
+    refreshEta: () => realActive && parentAccount ? etaCtl.refresh() : Promise.resolve(),
     flow,
     env,
     dismissal: dismissalLabel,

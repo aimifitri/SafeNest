@@ -1,8 +1,7 @@
-import { Link } from "expo-router";
+import { Link, useFocusEffect } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, AppState, Image, View, useWindowDimensions } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { AppState, Linking, View } from "react-native";
 
 import { Icon } from "../navigation/Icon";
 import { useAppContext } from "../shared/AppContext";
@@ -10,149 +9,184 @@ import { AppShell } from "../shared/AppShell";
 import { Card } from "../shared/Card";
 import { clock } from "../shared/circleEngine";
 import { sim } from "../shared/demoSim";
-import type { MapDot } from "../shared/MapView";
-import { MapView } from "../shared/MapView";
 import { useAuth } from "../shared/AuthContext";
 import { useChildSchool } from "../shared/HouseholdContext";
 import { EmptyState } from "../shared/forms";
 import { NextStepCard, SetupChecklist, useSetupActions } from "../onboarding/SetupChecklist";
-import { Banner, Btn, Glass, Press, Rise, SIc, T, useColors } from "../shared/ui";
+import { Banner, Btn, Press, Rise, SIc, Switch, T, useColors } from "../shared/ui";
 import { HelperAssignments } from "./HelperAssignments";
 import { PickupBanner, usePickupBanner } from "./PickupBanner";
 import { PickupStatusCard } from "./PickupStatusCard";
 import { usePickupFlow } from "./usePickupFlow";
-import { DemoSheet, FullMap } from "./DemoControls";
+import { DemoSheet } from "./DemoControls";
 import { DeviceLocationModal } from "./DeviceLocation";
-import { PickupEstimatePopup } from "./PickupEstimatePopup";
-
-const LOGO = require("../../../assets/images/logo.png");
-const PICKUP_WINDOW_BEFORE_MIN = 15;
-const PICKUP_WINDOW_AFTER_MIN = 30;
-const PICKUP_DISMISSED_STORAGE_PREFIX = "pickupDismissed";
-
-// Where each person's dot sits on the 400x320 illustrated map. The collector's dot follows pickupStatus.currentPlace.
-const PLACE_XY: Record<string, [number, number]> = { office: [60, 250], road: [180, 165], school: [250, 112] };
-const SCHOOL_XY: [number, number] = [252, 114];
-const BASE_XY: Record<string, [number, number]> = {
-  siti: [95, 75],
-  aiman: [352, 100],
-  ima: [40, 150],
-  ahmad: [340, 170],
-  abu: [200, 222],
-  salmah: [30, 215],
-};
+import { usePhoneLocation } from "../shared/usePhoneLocation";
+import { TodayGpsHeader } from "./TodayGpsHeader";
+import { todayMapModel } from "./todayMapModel";
+import { createProceedPickup, schoolNavigationTarget } from "./proceedPickup";
+import { PickupStatusModal } from "./PickupStatusModal";
+import { showInlinePickupStatus, demoPickupAlertKey, acknowledgePickupAlert, hasPickupAcknowledgement, pickupAlertKey, shouldShowPickupAlert } from "../shared/pickupStatus";
 
 export function TodayDashboard() {
+  const { household } = useChildSchool();
+  return <TodayDashboardForChild key={household.pickupScope} />;
+}
+function TodayDashboardForChild() {
   const { theme, selectedCaregiver, trustedHelpers, schoolLocation } = useAppContext();
-  const pf = usePickupFlow();
+  const [todayActive, setTodayActive] = useState(false);
+  const pf = usePickupFlow(todayActive);
   const { flow, collector, dismissal } = pf;
   const { child, school, hasChild, household } = useChildSchool();
-  const { profile } = useAuth();
+  const { profile, session } = useAuth();
   const goSetup = useSetupActions();
-  const familyMembers = household.members.map((m) => ({ id: m.userId, name: m.name }));
   const caregiver = selectedCaregiver?.name ?? "";
   const hour = pf.simActive ? Math.floor(pf.nowMin / 60) : new Date().getHours();
   const greeting = hour < 12 ? "Good morning," : hour < 17 ? "Good afternoon," : "Good evening,";
   const [demoOpen, setDemoOpen] = useState(false);
-  const [mapOpen, setMapOpen] = useState(false);
+  // Includes the native sheet's closing animation/dismissal, not just its requested visibility.
+  const [demoPresented, setDemoPresented] = useState(false);
   const [locationOpen, setLocationOpen] = useState(false);
   const [pickupPopupChildId, setPickupPopupChildId] = useState<string | null>(null);
   const [pickupPopupVisible, setPickupPopupVisible] = useState(false);
+  const activeToday = useRef(false);
+  const [proceedGate] = useState(createProceedPickup);
+  const [proceedBusy, setProceedBusy] = useState(false);
+  const [proceedError, setProceedError] = useState<string | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
-  const [backupMessage, setBackupMessage] = useState("");
   const [backupBanner, setBackupBanner] = useState<{ message: string; empty: boolean } | null>(null);
   const [circleScrollRequest, setCircleScrollRequest] = useState(0);
   const circleCardRef = useRef<View>(null);
-  const dismissedPickupKeys = useRef(new Set<string>());
+  const [foreground, setForeground] = useState(AppState.currentState === "active");
+  const [automaticWarnings, setAutomaticWarnings] = useState(true);
+  const [warningPreferenceReady, setWarningPreferenceReady] = useState(false);
+  const backupActionLock = useRef(false);
+  const previousJourney = useRef(false);
   const pendingGpsOpen = useRef(false);
   const pendingBackupRequest = useRef(false);
   const readyHelpers = trustedHelpers.filter((helper) => helper.state === "active").length;
+  const phone = usePhoneLocation(household.pickupScope, todayActive && !pf.simActive && !locationOpen);
+  const gpsTarget = schoolNavigationTarget(child, school, schoolLocation);
+  useFocusEffect(useCallback(() => {
+    activeToday.current = true; setTodayActive(true); setProceedBusy(false);
+    return () => {
+      activeToday.current = false; proceedGate.invalidate();
+      pendingGpsOpen.current = false; pendingBackupRequest.current = false;
+      setTodayActive(false); setDemoOpen(false); setLocationOpen(false); setPickupPopupVisible(false);
+    };
+  }, [proceedGate]));
 
-  const pickupDateKey = (date: Date) => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
+
+  const day = new Date(pf.nowMs).toDateString();
+  const baseAcknowledgement = pickupAlertKey(session?.user.id ?? "demo", household.familyId, child.id, pf.simActive, day, pf.dismissMin);
+  const acknowledgement = pf.simActive ? demoPickupAlertKey(baseAcknowledgement, household.pickupScope, pf.demo.state.resetVersion) : baseAcknowledgement;
+  const previousReset = useRef(pf.demo.state.resetVersion);
+  useEffect(() => {
+    if (previousReset.current === pf.demo.state.resetVersion) return;
+    previousReset.current = pf.demo.state.resetVersion;
+    if (!pf.simActive) return;
+    proceedGate.invalidate();
+    pendingGpsOpen.current = false; pendingBackupRequest.current = false;
+    setProceedBusy(false); setProceedError(null); setBackupBusy(false); setBackupBanner(null);
+    setPickupPopupVisible(false); setPickupPopupChildId(null); setLocationOpen(false);
+  }, [pf.simActive, pf.demo.state.resetVersion, proceedGate]);
+  const canCheck = household.demo || profile?.accountType === "parent";
+  const warningPreferenceKey = "pickup-in-app-warnings:" + JSON.stringify([session?.user.id ?? "demo", household.familyId, child.id]);
+  useEffect(() => {
+    let active = true;
+    if (pf.simActive) { setAutomaticWarnings(true); setWarningPreferenceReady(true); return; }
+    setWarningPreferenceReady(false);
+    void AsyncStorage.getItem(warningPreferenceKey).then(saved => {
+      if (active) { setAutomaticWarnings(saved !== "off"); setWarningPreferenceReady(true); }
+    }).catch(() => { /* Automatic interruption stays disabled if preferences cannot be read. */ });
+    return () => { active = false; };
+  }, [warningPreferenceKey, pf.simActive]);
+  const toggleWarnings = () => {
+    const next = !automaticWarnings;
+    setAutomaticWarnings(next);
+    if (!pf.simActive) void AsyncStorage.setItem(warningPreferenceKey, next ? "on" : "off").catch(() => {
+      setBackupBanner({ message: "The in-app warning preference changed for this session, but could not be saved.", empty: false });
+    });
   };
 
   useEffect(() => {
+    const sub = AppState.addEventListener("change", next => setForeground(next === "active"));
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
     let active = true;
-    let checking = false;
-    const checkPickupTime = async () => {
-      if (checking || locationOpen || pendingGpsOpen.current || !child) return;
-      checking = true;
-      try {
-        const now = new Date();
-        const currentMinute = pf.simActive
-          ? pf.nowMin
-          : now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
-        const minutesFromPickup = currentMinute - pf.dismissMin;
-        if (minutesFromPickup < -PICKUP_WINDOW_BEFORE_MIN || minutesFromPickup > PICKUP_WINDOW_AFTER_MIN) {
-          setPickupPopupVisible(false);
+    const consider = async () => {
+      const eligible = () => shouldShowPickupAlert(pf.status, {
+        now: pf.nowMin, dismissal: pf.dismissMin, foreground, enabled: automaticWarnings && warningPreferenceReady,
+        acknowledged: hasPickupAcknowledgement(acknowledgement), parentResponded: pf.parentResponded,
+        blocked: !todayActive || !pf.statusReady || !hasChild || !canCheck || locationOpen || demoPresented || pickupPopupChildId !== null || pickupPopupVisible || pendingGpsOpen.current,
+      });
+      if (!eligible()) return;
+      // Demo acknowledgements are memory-only. Real acknowledgements survive screen/app restarts.
+      if (!pf.simActive) {
+        try {
+          if (await AsyncStorage.getItem(acknowledgement)) { acknowledgePickupAlert(acknowledgement); return; }
+        } catch {
+          // Refuse automatic interruption if the acknowledgement cannot be checked. Manual access still works.
           return;
         }
-
-        const dateKey = pickupDateKey(now);
-        const storageKey = `${PICKUP_DISMISSED_STORAGE_PREFIX}:${child.id}:${dateKey}`;
-        if (dismissedPickupKeys.current.has(storageKey)) return;
-        if (pickupPopupChildId === child.id && pickupPopupVisible) return;
-
-        try {
-          const dismissed = await AsyncStorage.getItem(storageKey);
-          if (!active) return;
-          if (dismissed !== null) {
-            dismissedPickupKeys.current.add(storageKey);
-            setPickupPopupVisible(false);
-            return;
-          }
-        } catch (error) {
-          if (!active) return;
-          const reason = error instanceof Error ? error.message : "Unknown storage error.";
-          Alert.alert("Pickup reminder storage error", `The saved dismissal could not be checked. ${reason}`);
-        }
-        if (!active) return;
-        setBackupMessage("");
-        setPickupPopupChildId(child.id);
-        setPickupPopupVisible(true);
-      } finally {
-        checking = false;
       }
+      if (!active || !eligible()) return;
+      setPickupPopupChildId(child.id);
+      setPickupPopupVisible(true);
     };
-
-    void checkPickupTime();
-    const timer = setInterval(() => {
-      if (AppState.currentState === "active") void checkPickupTime();
-    }, 60_000);
-    const listener = AppState.addEventListener("change", (state) => {
-      if (state === "active") void checkPickupTime();
-    });
-    return () => {
-      active = false;
-      clearInterval(timer);
-      listener.remove();
-    };
-  }, [child, locationOpen, pf.dismissMin, pf.nowMin, pf.simActive, pickupPopupChildId, pickupPopupVisible]);
+    void consider();
+    return () => { active = false; };
+  }, [todayActive, automaticWarnings, warningPreferenceReady, acknowledgement, pf.status.kind, pf.statusReady, pf.nowMin, pf.dismissMin, pf.parentResponded, foreground, canCheck, hasChild, locationOpen, demoPresented, pickupPopupChildId, pickupPopupVisible, child.id, pf.simActive]);
 
   const closePickupPopup = useCallback(async () => {
-    if (!child) return;
-    const dateKey = pickupDateKey(new Date());
-    const storageKey = `${PICKUP_DISMISSED_STORAGE_PREFIX}:${child.id}:${dateKey}`;
-    dismissedPickupKeys.current.add(storageKey);
-    try {
-      await AsyncStorage.setItem(storageKey, "dismissed");
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : "Unknown storage error.";
-      Alert.alert("Pickup reminder not saved", `This reminder may appear again after reopening the app. ${reason}`);
-    }
+    proceedGate.invalidate(); setProceedBusy(false);
+    acknowledgePickupAlert(acknowledgement);
     setPickupPopupVisible(false);
-  }, [child]);
+    if (!pf.simActive) {
+      try { await AsyncStorage.setItem(acknowledgement, "acknowledged"); }
+      catch { setBackupBanner({ message: "This warning is dismissed for this session, but the acknowledgement could not be saved.", empty: false }); }
+    }
+  }, [acknowledgement, pf.simActive, proceedGate]);
+
+  const checkPickupStatus = () => {
+    if (demoPresented || locationOpen || pickupPopupChildId !== null || !todayActive) return;
+    setProceedError(null);
+    setPickupPopupChildId(child.id);
+    setPickupPopupVisible(true);
+    if (!["pending", "assigned", "journey", "completed", "cancelled"].includes(pf.status.kind)) void pf.refreshEta();
+  };
+  const proceedWithPickup = async () => {
+    if (pf.busy || backupBusy || proceedBusy) return;
+    setProceedBusy(true); setProceedError(null);
+    const demoVersion = pf.demo.state.resetVersion;
+    const result = await proceedGate.run(() => pf.run("still_collect"), () => activeToday.current && AppState.currentState === "active" && (!pf.simActive || sim.get().resetVersion === demoVersion),
+      () => { pendingGpsOpen.current = true; void closePickupPopup(); });
+    if (activeToday.current) {
+      setProceedBusy(false);
+      if (result === "failed") setProceedError("Pickup commitment could not be confirmed. Try again; Phone GPS has not been opened.");
+    }
+  };
+  const reviewPickup = () => { void closePickupPopup(); setCircleScrollRequest(value => value + 1); };
+  useEffect(() => {
+    if (flow.phase === "collected" || (previousJourney.current && !pf.journeyActive)) {
+      setLocationOpen(false); // Normal visibility cleanup stops the local GPS watcher.
+      setPickupPopupVisible(false);
+      pendingGpsOpen.current = false;
+    }
+    previousJourney.current = pf.journeyActive;
+  }, [flow.phase, pf.journeyActive]);
 
   const openGpsForPickup = useCallback(() => {
     pendingGpsOpen.current = true;
-    setPickupPopupVisible(false);
-  }, []);
+    void closePickupPopup();
+  }, [closePickupPopup]);
 
   const activateCircleBackup = useCallback(async () => {
+    if (backupActionLock.current) return;
+    if (["helper_assigned", "travelling", "at_school", "collected"].includes(flow.phase)) {
+      setCircleScrollRequest(value => value + 1); setBackupBusy(false); return;
+    }
     const eligiblePeople = pf.people.filter((person) => person.approved && person.id !== pf.viewerId);
     if (flow.phase === "asking") {
       const count = flow.recipients.length;
@@ -170,9 +204,12 @@ export function TodayDashboard() {
       return;
     }
 
+    const demoVersion = pf.demo.state.resetVersion;
+    backupActionLock.current = true;
     setBackupBusy(true);
     try {
-      const started = await pf.run("find_backup");
+      const started = await pf.run(flow.phase === "nobody" ? "ask_again" : "find_backup");
+      if (pf.simActive && sim.get().resetVersion !== demoVersion) return;
       if (!started) {
         setBackupBanner({
           message: pf.error ?? "Nobody could be asked. Check that your circle has approved members.",
@@ -195,58 +232,62 @@ export function TodayDashboard() {
       const reason = error instanceof Error ? error.message : "Unknown backup request error.";
       setBackupBanner({ message: `Unable to start a backup request. ${reason}`, empty: false });
     } finally {
+      backupActionLock.current = false;
       setBackupBusy(false);
     }
   }, [flow.phase, flow.recipients.length, pf]);
 
   const closePopupAndActivateBackup = useCallback(() => {
-    if (backupBusy) return;
+    if (backupBusy || !pf.simActive) return;
     pendingBackupRequest.current = true;
     setBackupBusy(true);
     void closePickupPopup();
-  }, [backupBusy, closePickupPopup]);
+  }, [backupBusy, closePickupPopup, pf.simActive]);
 
   const onPickupPopupExited = useCallback(() => {
     setPickupPopupChildId(null);
     if (pendingGpsOpen.current) {
       pendingGpsOpen.current = false;
-      setLocationOpen(true);
+      if (activeToday.current && flow.phase !== "collected") setLocationOpen(true);
       return;
     }
     if (pendingBackupRequest.current) {
       pendingBackupRequest.current = false;
       void activateCircleBackup();
     }
-  }, [activateCircleBackup]);
+  }, [activateCircleBackup, flow.phase]);
 
-  // Map dots (simulated map). The collector's dot follows the phase. In the demo a backup collector's marker moves
-  // along the map while travelling (made-up progress, shown as simulated). In real mode nothing is tracked, so the
-  // marker only jumps between "at home", "on the way" and "at school".
-  const atSchoolPhases = ["at_school", "collected"];
-  const place = flow.phase === "travelling" || flow.phase === "helper_assigned" ? "road" : atSchoolPhases.includes(flow.phase) ? "school" : "office";
-  const collected = flow.phase === "collected";
-  const helperCollector = collector.kind !== "parent";
-  const travel = pf.simActive ? pf.demo.state.travel : null;
-  const dots: MapDot[] = [...familyMembers, ...trustedHelpers.filter((helper) => helper.state === "active")].map((person) => {
-    const isCollector = person.name === collector.name;
-    const home = BASE_XY[person.id] ?? [200, 250];
-    let xy: [number, number] = isCollector ? PLACE_XY[place] : home;
-    if (isCollector && helperCollector) {
-      if (flow.phase === "helper_assigned") xy = home;
-      else if (flow.phase === "travelling") xy = travel === null ? PLACE_XY.road : [home[0] + (SCHOOL_XY[0] - home[0]) * travel, home[1] + (SCHOOL_XY[1] - home[1]) * travel];
-      else if (atSchoolPhases.includes(flow.phase)) xy = SCHOOL_XY;
-    }
-    return { id: person.id, name: person.name, x: xy[0], y: xy[1], ring: isCollector && !collected, hidden: isCollector && collected };
-  });
   const banner = usePickupBanner({ phase: flow.phase, collector: collector.name, childName: child.name, simulated: pf.simActive, whenLabel: `Picked up at ${clock(pf.nowMin)}` });
-  const mapNote = flow.phase === "travelling" && pf.simActive ? "Simulated movement" : "Simulated map";
+  const headerMap = <TodayGpsHeader key={`${household.pickupScope}:${pf.simActive ? "demo" : "real"}`}
+    model={todayMapModel({ demo: pf.simActive, childId: child.id, schoolName: gpsTarget.name, school: gpsTarget.coordinate,
+      snapshot: phone.snapshot, now: Date.now(), simulation: pf.demo.state, collector, phase: flow.phase })}
+    snapshot={phone.snapshot} demo={pf.simActive} clockLabel={pf.simActive ? clock(pf.nowMin) : null}
+    onDemo={() => { if (!locationOpen && pickupPopupChildId === null && !demoPresented) { setDemoPresented(true); setDemoOpen(true); } }} onGps={() => { if (!demoPresented && pickupPopupChildId === null) setLocationOpen(true); }}
+    onRefresh={() => { void phone.refresh().catch(() => {}); }} onAllow={() => { void phone.request().catch(() => {}); }}
+    onSettings={() => { void Linking.openSettings(); }} />;
+  const phoneGps = <DeviceLocationModal
+        key={household.pickupScope}
+        visible={locationOpen && todayActive}
+        onClose={() => setLocationOpen(false)}
+        schoolName={gpsTarget.name}
+        schoolAddress={gpsTarget.address}
+        schoolLocation={gpsTarget.coordinate}
+        requireSavedSchoolLocation
+        demoPreview={pf.simActive}
+        allowSharing={!pf.simActive}
+        onLocationUpdate={update => {
+          if (activeToday.current && !pf.simActive) phone.accept({ timestamp: update.timestamp, coords: { latitude: update.latitude, longitude: update.longitude, accuracy: update.accuracy } });
+        }}
+      />;
 
-  // A real account with no child yet: no map, no sample people. Say what is missing and offer the next step.
+  // A real account with no child yet: no sample people. Say what is missing and offer the next step.
   if (!hasChild && !household.demo) {
     const helper = profile?.accountType === "helper";
     return (
-      <AppShell title="SafeNest" badge="Today" activeTab="home">
-        <HelperAssignments />
+      <AppShell title="SafeNest" badge="Today" activeTab="home" header={canCheck ? headerMap : undefined}>
+        {phoneGps}
+        <DemoSheet visible={demoOpen} onClose={() => setDemoOpen(false)} onExited={() => setDemoPresented(false)} pf={pf} />
+        {!pf.simActive ? <HelperAssignments /> : null}
         {household.error ? <Banner>{household.error}</Banner> : null}
         {!household.ready ? (
           <T c="muted">Loading...</T>
@@ -277,9 +318,9 @@ export function TodayDashboard() {
       activeTab="home"
       scrollTargetRef={circleCardRef}
       scrollRequest={circleScrollRequest}
-      header={<TodayMap dots={dots} trail={collected} note={mapNote} clockLabel={pf.simActive ? clock(pf.nowMin) : null} onDemo={() => setDemoOpen(true)} onExpand={() => setMapOpen(true)} onLocation={() => setLocationOpen(true)} />}
+      header={headerMap}
     >
-      <HelperAssignments />
+      {!pf.simActive ? <HelperAssignments /> : null}
 
       <Rise i={0} style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", rowGap: 8, columnGap: 12 }}>
         <View style={{ flexGrow: 1, flexShrink: 1, flexBasis: 140, minWidth: 0 }}>
@@ -288,6 +329,14 @@ export function TodayDashboard() {
         </View>
         <ChildChip name={child.name} dismissal={dismissal} />
       </Rise>
+
+      {canCheck ? <Rise i={1}>
+        <Btn kind="o" onPress={checkPickupStatus}>Check pickup status</Btn>
+        <Press role="switch" label="In-app delay warnings" state={{ checked: automaticWarnings }} disabled={!warningPreferenceReady} onPress={toggleWarnings} style={{ minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          <T s={0.84}>In-app delay warnings</T><Switch on={automaticWarnings} />
+        </Press>
+        <T s={0.8} c="muted">{pf.status.title} {pf.simActive ? "Demo estimate." : "This phone's driving estimate; no live traffic."}</T>
+      </Rise> : null}
 
       {pf.simActive ? (
         <Rise i={1}>
@@ -328,7 +377,8 @@ export function TodayDashboard() {
       ) : null}
 
       <View ref={circleCardRef}>
-        <PickupStatusCard pf={pf} childName={child.name} />
+        {/* Late-estimate decisions belong to the modal; retain request, commitment and journey cards. */}
+        {showInlinePickupStatus(flow.phase, pf.status) ? <PickupStatusCard pf={pf} childName={child.name} /> : null}
       </View>
 
       <NextStepCard />
@@ -339,29 +389,24 @@ export function TodayDashboard() {
           <NavRow href="/circle" icon="circle" title="Trusted circle" sub={`${readyHelpers} helper${readyHelpers === 1 ? "" : "s"} ready to collect`} />
         </Card>
       </Rise>
-      <DemoSheet visible={demoOpen} onClose={() => setDemoOpen(false)} pf={pf} />
-      <FullMap visible={mapOpen} onClose={() => setMapOpen(false)} dots={dots} trail={collected} />
-      <DeviceLocationModal
-        visible={locationOpen}
-        onClose={() => setLocationOpen(false)}
-        schoolName={school?.name ?? ""}
-        schoolAddress={school?.address ?? ""}
-        schoolLocation={schoolLocation}
-      />
+      <DemoSheet visible={demoOpen} onClose={() => setDemoOpen(false)} onExited={() => setDemoPresented(false)} pf={pf} />
+      {phoneGps}
+
       {child && pickupPopupChildId === child.id ? (
-        <PickupEstimatePopup
+        <PickupStatusModal
           visible={pickupPopupVisible}
-          accessibilityLabel="Pickup estimate"
           childName={child.name}
-          schoolName={school?.name ?? ""}
-          schoolAddress={school?.address ?? ""}
-          schoolLocation={schoolLocation}
+          schoolName={school.name}
+          pf={pf}
+          proceedBusy={proceedBusy}
+          proceedError={proceedError}
           onClose={() => void closePickupPopup()}
           onGo={openGpsForPickup}
           onExited={onPickupPopupExited}
+          onProceed={() => void proceedWithPickup()}
+          onReview={reviewPickup}
           onActivateBackup={closePopupAndActivateBackup}
           backupBusy={backupBusy}
-          backupMessage={backupMessage}
         />
       ) : null}
     </AppShell>
@@ -383,59 +428,6 @@ function NavRow({ href, icon, title, sub, first }: { href: "/plan" | "/circle"; 
         <Icon name="chev" size={18} color={c.muted} stroke={2} />
       </Press>
     </Link>
-  );
-}
-
-/** Full-bleed illustrated map with the frosted overlay chips. */
-function TodayMap({ dots, trail, note, clockLabel, onDemo, onExpand, onLocation }: { dots: MapDot[]; trail: boolean; note: string; clockLabel: string | null; onDemo: () => void; onExpand: () => void; onLocation: () => void }) {
-  const c = useColors();
-  const insets = useSafeAreaInsets();
-  const { height: winH } = useWindowDimensions();
-  const h = Math.min(380, Math.max(240, winH * 0.4)) + insets.top;
-  const topY = Math.max(12, insets.top + 8);
-  return (
-    <View style={{ height: h, backgroundColor: c.map, overflow: "hidden" }}>
-      <MapView dots={dots} trail={trail} label="Illustrated simulated map showing the school and pickup route" />
-      <View pointerEvents="box-none" style={{ position: "absolute", left: 16, right: 16, top: topY, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        <Glass style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 5, paddingLeft: 5, paddingRight: 12 }}>
-          <Image source={LOGO} style={{ width: 30, height: 30, borderRadius: 15 }} />
-          <T w={700} ls={-0.01}>SafeNest</T>
-        </Glass>
-        {clockLabel ? (
-          <Glass style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, height: 38 }}>
-            <Icon name="clock" size={16} color={c.primaryInk} stroke={2} />
-            <T s={0.85} w={800} c={c.primaryInk} tab>{clockLabel}</T>
-          </Glass>
-        ) : null}
-        <Press onPress={onDemo} label="Open demo controls" hint="Preview simulated pickup situations" style={{ minHeight: 44, justifyContent: "center" }}>
-          <Glass style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, height: 38 }}>
-            <Icon name="sliders" size={16} color={c.primaryInk} stroke={2} />
-            <T s={0.85} w={700} c={c.primaryInk}>Demo</T>
-          </Glass>
-        </Press>
-      </View>
-      <View pointerEvents="box-none" style={{ position: "absolute", left: 16, right: 16, bottom: 36, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        <View pointerEvents="none">
-          <Glass style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, height: 34 }}>
-            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: c.trail }} />
-            <T s={0.8} w={600} c="muted">{note}</T>
-          </Glass>
-        </View>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-          <Press onPress={onLocation} label="Open this phone's live location" style={{ minHeight: 44, justifyContent: "center" }}>
-            <Glass style={{ height: 38, flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10 }}>
-              <Icon name="look" size={16} color={c.primaryInk} stroke={2} />
-              <T s={0.78} w={700} c={c.primaryInk}>My GPS</T>
-            </Glass>
-          </Press>
-          <Press onPress={onExpand} label="Open full screen simulated map" style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-            <Glass style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center", paddingHorizontal: 0 }}>
-              <Icon name="expand" size={18} color={c.primaryInk} stroke={2} />
-            </Glass>
-          </Press>
-        </View>
-      </View>
-    </View>
   );
 }
 

@@ -27,6 +27,8 @@ import {
 
 import { useAuth } from "./AuthContext";
 import { useHousehold } from "./HouseholdContext";
+import { initialWeek } from "./childScope";
+import { useScopedState } from "./useScopedState";
 import { fetchPlan, savePlanDay } from "./householdApi";
 import {
   cancelRequest,
@@ -152,20 +154,18 @@ export function AppProvider({
 
   const household = useHousehold();
   const hhChildId = household.child?.id ?? null;
+  const pickupScope = household.pickupScope;
 
   // Demo Mode starts from the sample schedule. A real account starts from a neutral default until its own plan is
   // loaded from Supabase (public.pickup_plans); planConfigured says whether the parent has saved one.
-  const [weeklySchedule, setWeeklySchedule] =
-    useState<WeekdayTimes>(() => ({
-      ...mockData.schedule.weekdayTimes,
-    }));
-  const [planConfigured, setPlanConfigured] = useState(true);
-  const [planError, setPlanError] = useState<string | null>(null);
+  const [weeklySchedule, setWeeklySchedule] = useScopedState<WeekdayTimes>(pickupScope, initialWeek(hhChildId, household.demo));
+  const [planConfigured, setPlanConfigured] = useScopedState(pickupScope, household.demo);
+  const [planError, setPlanError] = useScopedState<string | null>(pickupScope, null);
 
   useEffect(() => {
     setPlanError(null);
     if (household.demo) {
-      setWeeklySchedule({ ...mockData.schedule.weekdayTimes });
+      // The selected demo child retains its own in-memory schedule.
       setPlanConfigured(true);
       return;
     }
@@ -187,7 +187,7 @@ export function AppProvider({
     return () => {
       active = false;
     };
-  }, [household.demo, hhChildId]);
+  }, [household.demo, hhChildId, pickupScope]);
 
   // Save one weekday without changing other days.
   const updateWeekdayTime = (
@@ -196,7 +196,7 @@ export function AppProvider({
     time: string
   ) => {
     // Only the child SafeNest is currently about can be changed.
-    const currentChildId = household.demo ? mockData.child.id : hhChildId;
+    const currentChildId = hhChildId;
     if (!currentChildId || childId !== currentChildId) {
       return;
     }
@@ -244,38 +244,38 @@ export function AppProvider({
   const [
     temporaryDismissal,
     setTemporaryDismissal,
-  ] = useState<TemporaryDismissal | null>(null);
+  ] = useScopedState<TemporaryDismissal | null>(pickupScope + new Date().toDateString(), null);
 
   const { session, familyId } = useAuth();
   const [backupRequest, setBackupRequest] =
-    useState<BackupRequest>(mockData.backupRequest);
-  const [backupBusy, setBackupBusy] = useState(false);
-  const [backupError, setBackupError] = useState<string | null>(null);
-  const [dbChild, setDbChild] = useState<StoredChild | null>(null);
-  const dbChildId = dbChild?.id ?? null;
-  const backupRef = useRef<BackupRequest>(backupRequest);
-  const busyRef = useRef(false);
-  const dismissedId = useRef<string | null>(null);
+    useScopedState<BackupRequest>(pickupScope, household.demo ? mockData.backupRequest : { state: "idle", simulated: false });
+  const [backupBusy, setBackupBusy] = useScopedState(pickupScope, false);
+  const [backupError, setBackupError] = useScopedState<string | null>(pickupScope, null);
+  const [dbChild, setDbChild] = useScopedState<StoredChild | null>(pickupScope, null);
+  const dbChildId = dbChild?.id === hhChildId ? dbChild.id : null;
+  const backupRef = useMemo(() => ({ current: backupRequest }), [pickupScope]);
+  const busyRef = useMemo(() => ({ current: false }), [pickupScope]);
+  const dismissedId = useMemo<{ current: string | null }>(() => ({ current: null }), [pickupScope]);
 
   useEffect(() => {
     backupRef.current = backupRequest;
   }, [backupRequest]);
 
-  // The child stored for this family. Without one, backup requests stay a local demo.
+  // Resolve only the selected child within this family. Real accounts never fall back to demo requests.
   const userId = session?.user.id;
   useEffect(() => {
-    if (!familyId || !userId) {
+    if (household.demo || !familyId || !userId || !hhChildId) {
       setDbChild(null);
       return;
     }
     let active = true;
-    void fetchFirstChild(familyId).then((child) => {
+    void fetchFirstChild(familyId, hhChildId).then((child) => {
       if (active) setDbChild(child);
     });
     return () => {
       active = false;
     };
-  }, [familyId, userId, household.version]);
+  }, [familyId, userId, hhChildId, pickupScope, household.demo, household.version]);
 
   const refreshBackup = useCallback(async () => {
     if (!dbChildId) return;
@@ -289,7 +289,7 @@ export function AppProvider({
     // Do not wipe a demo that is in progress.
     if (current.simulated && current.state !== "idle") return;
     setBackupRequest(toUiRequest(res.data, dismissedId.current));
-  }, [dbChildId]);
+  }, [dbChildId, pickupScope]);
 
   // Load, then follow changes live. Also re-check when the app returns to the foreground.
   useEffect(() => {
@@ -303,7 +303,7 @@ export function AppProvider({
       unsubscribe();
       appState.remove();
       dismissedId.current = null;
-      setBackupRequest(mockData.backupRequest);
+      // The outgoing child retains its own snapshot; the next child has a separate scope.
     };
   }, [dbChildId, refreshBackup]);
 
@@ -335,6 +335,10 @@ export function AppProvider({
         }
         return createBackupRequest(dbChildId, helperId);
       });
+    }
+    if (!household.demo) {
+      setBackupError("The selected child or authorized helper is not ready. No request was sent.");
+      return false;
     }
     setBackupRequest({ state: "requested", helperId, simulated: true });
     return true;
@@ -436,6 +440,7 @@ export function AppProvider({
       theme,
     }),
     [
+      pickupScope,
       selectedCaregiver,
       themeMode,
       textScale,

@@ -7,10 +7,13 @@ export type RouteResult = { ok: true; minutes: number } | { ok: false; reason: "
 export async function fetchRouteMinutes(
   from: LatLng,
   to: LatLng,
-  opts: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  opts: { fetchImpl?: typeof fetch; timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<RouteResult> {
   const doFetch = opts.fetchImpl ?? fetch;
   const controller = new AbortController();
+  const cancel = () => controller.abort();
+  opts.signal?.addEventListener("abort", cancel);
+  if (opts.signal?.aborted) cancel();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 8000);
   try {
     const url = `https://router.project-osrm.org/route/v1/driving/${from.longitude},${from.latitude};${to.longitude},${to.latitude}?overview=false`;
@@ -26,5 +29,6 @@ export async function fetchRouteMinutes(
     return { ok: false, reason: "network" };
   } finally {
     clearTimeout(timer);
+    opts.signal?.removeEventListener("abort", cancel);
   }
 }

@@ -1,0 +1,38 @@
+import { build } from "esbuild";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "safenest-demo-reset-"));
+let passed = 0;
+const test = (name, run) => { run(); passed++; console.log("PASS", name); };
+try {
+  const stub = path.join(dir, "react.mjs"); fs.writeFileSync(stub, "export const useSyncExternalStore = () => { throw Error('hook'); };");
+  const out = path.join(dir, "test.mjs");
+  await build({ stdin: { contents: "export * from './src/components/shared/demoSim'; export * from './src/components/shared/pickupStatus'; export * from './src/components/today/todayMapModel'; export { minutesOfDay, predictedArrivalMinutes } from './src/components/shared/pickupFlow'; export { clock } from './src/components/shared/circleEngine';", resolveDir: process.cwd(), loader: "ts" }, bundle: true, format: "esm", platform: "node", outfile: out, alias: { react: stub }, logLevel: "silent" });
+  const S = await import(pathToFileURL(out).href), { sim } = S;
+  const people = [{ id: "abu", name: "Abu", role: "Parent", kind: "family", approved: true }, { id: "siti", name: "Siti", role: "Parent", kind: "family", approved: true }];
+  const env = { people, viewerId: "abu", viewerName: "Abu", planDismiss: 780, teacherName: "Teacher" };
+  const key = () => S.demoPickupAlertKey("test-base", "laila", sim.get().resetVersion);
+  const status = () => { const i = S.simInputs(sim.get(), env); return S.pickupStatus(i.eta, S.minutesOfDay(i.nowMs), S.dismissMinutes(sim.get(), env), "late", "Laila", "Abu"); };
+  const warn = () => S.shouldShowPickupAlert(status(), { now: sim.get().now, dismissal: env.planDismiss, acknowledged: S.hasPickupAcknowledgement(key()), parentResponded: sim.get().engine.stage === "committed", foreground: true, blocked: false });
+  sim.selectScope("laila"); sim.reset(env); sim.setAutoReplies(false);
+  test("default reset clock is documented 12:05 PM", () => { assert.equal(sim.get().now, 725); assert.equal(S.clock(sim.get().now), "12:05 PM"); });
+  test("manual clock changes synchronize displayed time and ETA", () => { sim.setNow(750, env); const i = S.simInputs(sim.get(), env); assert.equal(S.minutesOfDay(i.nowMs), 750); assert.equal(S.clock(S.minutesOfDay(i.nowMs)), S.clock(sim.get().now)); assert.equal(S.predictedArrivalMinutes(i.eta), 785); });
+  test("late preset produces ten-minute-late status using same clock", () => { sim.preset("late", env); assert.equal(status().minutesLate, 10); assert.equal(status().arrival, 790); assert.equal(warn(), true); });
+  test("dismissal suppresses duplicate warning", () => { S.acknowledgePickupAlert(key()); assert.equal(warn(), false); });
+  test("reset invalidates acknowledged episode and returns clock to default", () => { const old = key(); sim.reset(env); assert.notEqual(key(), old); assert.equal(S.hasPickupAcknowledgement(key()), false); assert.equal(sim.get().now, S.SIM_START.now); });
+  test("same lateness scenario can warn again after reset", () => { sim.preset("late", env); assert.equal(warn(), true); });
+  test("reset clears Proceed decision", () => { sim.act("still_collect", env); assert.equal(S.simInputs(sim.get(), env).parentChoice, "will_collect"); sim.reset(env); assert.equal(S.simInputs(sim.get(), env).parentChoice, "none"); assert.equal(sim.get().engine.leaveAt, null); });
+  test("reset clears pending backup recipients and responses", () => { sim.act("find_backup", env); assert.equal(sim.get().engine.stage, "circle"); sim.reset(env); assert.equal(sim.get().engine.stage, "plan"); assert.deepEqual(sim.get().engine.replies, {}); assert.equal(S.simInputs(sim.get(), env).circle, null); });
+  test("backup works again after reset", () => { assert.equal(sim.act("find_backup", env), true); assert.equal(sim.get().engine.stage, "circle"); sim.reset(env); });
+  test("reset clears accepted collector and movement", () => { sim.act("find_backup", env); S.answer("siti", "yes", env); sim.depart(env); sim.reset(env); assert.equal(sim.get().engine.collector, null); assert.equal(sim.get().travel, 0); assert.equal(sim.get().parentJourney, null); });
+  test("reset clears parent journey, location failure and stale estimate", () => { sim.act("start_journey", env); sim.setDelay(20, env); sim.setLocation("denied", env); sim.reset(env); const i = S.simInputs(sim.get(), env); assert.equal(i.journey, null); assert.equal(i.eta.kind, "ready"); assert.equal(i.eta.minutes, 35); assert.equal(S.minutesOfDay(i.eta.checkedAt), 725); });
+  test("preserves intended settings but restores dismissal override", () => { sim.setEscalation({ enabled: false, minutesBefore: 9 }, env); sim.setForced(true); sim.setDismiss(840, env); sim.reset(env); assert.equal(sim.get().escalation.enabled, false); assert.equal(sim.get().escalation.minutesBefore, 9); assert.equal(sim.get().forced, true); assert.equal(sim.get().autoReplies, false); assert.equal(sim.get().dismissOverride, null); });
+  test("Laila reset leaves Hana clock, decision and acknowledgement intact", () => { sim.selectScope("hana", true); sim.setNow(800, { ...env, planDismiss: 870 }); sim.act("still_collect", env); const hana = sim.get(); const hanaKey = S.demoPickupAlertKey("test-base", "hana", hana.resetVersion); S.acknowledgePickupAlert(hanaKey); sim.selectScope("laila"); sim.reset(env); sim.selectScope("hana"); assert.deepEqual(sim.get(), hana); assert.equal(S.hasPickupAcknowledgement(hanaKey), true); sim.selectScope("laila"); });
+  test("reset map uses initial simulated parent, never phone GPS", () => { sim.setPlace("school", env); sim.reset(env); const model = S.todayMapModel({ demo: true, childId: "laila", schoolName: "School", school: null, snapshot: { kind: "idle", fix: null, label: null, message: "", blocked: false }, now: Date.now(), simulation: sim.get(), collector: { kind: "parent", name: "Abu" }, phase: "monitoring" }); assert.equal(model.title, "Demo GPS ? Simulated"); assert.notEqual(model.point.latitude, model.school.latitude); assert.deepEqual(model.additionalPoints, []); });
+  test("UI reset invalidates late Proceed actions and uses episode acknowledgement", () => { const source = fs.readFileSync("src/components/today/TodayDashboard.tsx", "utf8"); assert.match(source, /demoPickupAlertKey\(baseAcknowledgement, household.pickupScope, pf.demo.state.resetVersion\)/); assert.match(source, /sim.get\(\).resetVersion === demoVersion/); assert.match(source, /sim.get\(\).resetVersion !== demoVersion/); assert.match(source, /previousReset.current = pf.demo.state.resetVersion/); });
+  test("controls explain default time and child-only reset", () => { const source = fs.readFileSync("src/components/today/DemoControls.tsx", "utf8"); assert.match(source, /clock\(SIM_START.now\)/); assert.match(source, /Restart this child/); });
+  console.log(`${passed} assertions passed`);
+} finally { fs.rmSync(dir, { recursive: true, force: true }); }

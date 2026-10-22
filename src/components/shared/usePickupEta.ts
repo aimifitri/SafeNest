@@ -1,107 +1,48 @@
 import * as Location from "expo-location";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { AppState } from "react-native";
+import { fetchRouteMinutes, type LatLng } from "./eta";
+import { createPickupEstimate } from "./pickupEstimate";
+import { phoneLocationFor } from "./phoneLocationService";
+import { LOCATION_POLICY } from "./locationQuality";
 
-import { fetchRouteMinutes } from "./eta";
-import type { LatLng } from "./eta";
-import { PICKUP_CONFIG } from "./pickupFlow";
-import type { Eta } from "./pickupFlow";
-
-const POSITION_TIMEOUT_MS = 10_000;
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout")), ms);
-    promise.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      (e) => { clearTimeout(timer); reject(e); },
-    );
-  });
-}
-
-/**
- * The parent's travel time to school, from this phone's location (foreground only).
- * Nothing is sent anywhere except the two coordinates to the routing service.
- * `school` null means SafeNest does not know where the school is, so no estimate is possible.
- * When `enabled` is false the hook does nothing (demo mode supplies its own numbers).
- */
-export function usePickupEta(school: LatLng | null, enabled: boolean) {
-  const [eta, setEta] = useState<Eta>({ kind: "checking" });
-  const lastCheck = useRef(0);
-  const running = useRef(false);
-
-  const compute = useCallback(async (silent: boolean) => {
-    if (!school) {
-      setEta({ kind: "unavailable", reason: "no_school_location" });
-      return;
-    }
-    if (running.current) return;
-    running.current = true;
-    if (!silent) setEta({ kind: "checking" });
-    try {
-      let position: Location.LocationObject;
-      try {
-        position = await withTimeout(Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }), POSITION_TIMEOUT_MS);
-      } catch {
-        setEta({ kind: "unavailable", reason: "no_gps" });
-        return;
-      }
-      const checkedAt = Date.now();
-      const route = await fetchRouteMinutes(position.coords, school);
-      if (!route.ok) {
-        setEta({ kind: "unavailable", reason: route.reason === "network" ? "network" : "no_gps" });
-        return;
-      }
-      lastCheck.current = checkedAt;
-      setEta({ kind: "ready", minutes: route.minutes, source: "route", checkedAt });
-    } finally {
-      running.current = false;
-    }
-  }, [school]);
-
-  // Look at the current permission without asking. Granted -> estimate. Otherwise wait for the parent to tap.
-  const evaluate = useCallback(async () => {
-    if (!school) {
-      setEta({ kind: "unavailable", reason: "no_school_location" });
-      return;
-    }
-    try {
-      const permission = await Location.getForegroundPermissionsAsync();
-      if (permission.status === "granted") await compute(false);
-      else setEta({ kind: "permission_needed", blocked: permission.status === "denied" && !permission.canAskAgain });
-    } catch {
-      setEta({ kind: "unavailable", reason: "no_gps" });
-    }
-  }, [school, compute]);
-
-  // The parent tapped "Check my travel time": this is the only place the permission is asked.
-  const request = useCallback(async () => {
-    try {
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (permission.status === "granted") await compute(false);
-      else setEta({ kind: "permission_needed", blocked: !permission.canAskAgain });
-    } catch {
-      setEta({ kind: "unavailable", reason: "no_gps" });
-    }
-  }, [compute]);
-
-  const refresh = useCallback(() => evaluate(), [evaluate]);
-
+const estimates = new Map<string, { phone: ReturnType<typeof phoneLocationFor>; controller: ReturnType<typeof createPickupEstimate>; users: number; activeUsers: number }>();
+export function usePickupEta(school: LatLng | null, enabled: boolean, scope = "default") {
+  const key = JSON.stringify([scope, school?.latitude, school?.longitude]);
+  const entry = useMemo(() => {
+    const existing = estimates.get(key);
+    if (existing) return existing;
+    const phone = phoneLocationFor(scope);
+    const created = { users: 0, activeUsers: 0, phone, controller: createPickupEstimate({
+      permission: ask => ask ? Location.requestForegroundPermissionsAsync() : Location.getForegroundPermissionsAsync(),
+      services: () => Location.hasServicesEnabledAsync(),
+      position: () => phone.controller.read(),
+      route: (from, to, signal) => fetchRouteMinutes(from, to, { signal }),
+      now: Date.now,
+    }, school) };
+    estimates.set(key, created); return created;
+  }, [key]);
+  const controller = entry.controller;
+  const eta = useSyncExternalStore(controller.subscribe, controller.get, controller.get);
+  useEffect(() => {
+    entry.users++;
+    const releasePhone = entry.phone.retain();
+    estimates.set(key, entry);
+    const lifecycle = AppState.addEventListener("change", next => { if (next === "background") controller.invalidate(); });
+    return () => { lifecycle.remove(); releasePhone(); if (--entry.users === 0) { controller.invalidate(); estimates.delete(key); } };
+  }, [entry, controller, key]);
   useEffect(() => {
     if (!enabled) return;
-    void evaluate();
-    const maxAge = PICKUP_CONFIG.etaMaxAgeMinutes * 60_000;
-    const timer = setInterval(() => {
-      if (AppState.currentState === "active" && lastCheck.current > 0 && Date.now() - lastCheck.current >= maxAge) void compute(true);
-    }, 60_000);
-    const sub = AppState.addEventListener("change", (next) => {
-      if (next === "active" && lastCheck.current > 0 && Date.now() - lastCheck.current >= maxAge) void compute(true);
-    });
-    return () => {
-      clearInterval(timer);
-      sub.remove();
+    entry.activeUsers++;
+    const refresh = () => {
+      if (AppState.currentState !== "active") return;
+      const current = controller.get();
+      if (current.kind !== "ready" || Date.now() - (current.positionTimestamp ?? current.checkedAt) >= LOCATION_POLICY.maxAgeMs) void controller.refresh();
     };
-  }, [enabled, evaluate, compute]);
-
-  return { eta, request, refresh };
+    refresh();
+    const timer = setInterval(refresh, 30_000);
+    const sub = AppState.addEventListener("change", next => { if (next === "active") refresh(); });
+    return () => { clearInterval(timer); sub.remove(); if (--entry.activeUsers === 0) controller.invalidate(); };
+  }, [controller, entry, enabled]);
+  return { eta, stop: controller.invalidate, request: () => controller.refresh(true), refresh: () => controller.refresh(false) };
 }

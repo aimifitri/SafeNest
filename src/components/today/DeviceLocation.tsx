@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Icon } from "../navigation/Icon";
 import { useAppContext } from "../shared/AppContext";
+import { LOCATION_POLICY, positionIssue, locationIssueMessage, withDeadline } from "../shared/locationQuality";
 import { mockData } from "../shared/mockData";
 import { Btn, Input, Press, T } from "../shared/ui";
 import { DeviceLocationMap } from "./DeviceLocationMap";
@@ -32,6 +33,9 @@ type DeviceLocationModalProps = {
   schoolName?: string;
   schoolAddress?: string;
   schoolLocation?: DeviceLocationCoordinate | null;
+  requireSavedSchoolLocation?: boolean;
+  demoPreview?: boolean;
+  allowSharing?: boolean;
   onLocationUpdate?: (update: LiveLocationUpdate) => void;
   onLocationError?: (error: Error) => void;
 };
@@ -297,6 +301,9 @@ export function DeviceLocationModal({
   schoolLocation: plannedSchoolLocation,
   onLocationUpdate,
   onLocationError,
+  requireSavedSchoolLocation = false,
+  demoPreview = false,
+  allowSharing = true,
 }: DeviceLocationModalProps) {
   const {
     theme,
@@ -320,6 +327,7 @@ export function DeviceLocationModal({
   const progressIndexRef = useRef(0);
   const callbacks = useRef({ onLocationUpdate, onLocationError });
   callbacks.current = { onLocationUpdate, onLocationError };
+  const [gpsNow, setGpsNow] = useState(Date.now);
   const [location, setLocation] = useState<LocationObject | null>(null);
   const locationRef = useRef<LocationObject | null>(null);
   const [currentLatitude, setCurrentLatitude] = useState("");
@@ -428,6 +436,18 @@ export function DeviceLocationModal({
     return () => listener.remove();
   }, []);
 
+  useEffect(() => {
+    if (!screenPresented) return;
+    const timer = setInterval(() => {
+      const now = Date.now(); setGpsNow(now);
+      const fix = locationRef.current;
+      if (fix && now - fix.timestamp > LOCATION_POLICY.maxAgeMs) {
+        stopNavigation(); setError("The last GPS reading is stale. Refresh before navigating or sharing.");
+      }
+    }, 10_000);
+    return () => clearInterval(timer);
+  }, [screenPresented]);
+
   const stopTracking = () => {
     starting.current = false;
     trackingRequestId.current += 1;
@@ -470,6 +490,9 @@ export function DeviceLocationModal({
   };
 
   const updateLocation = (next: LocationObject) => {
+    const issue = positionIssue(next, Date.now());
+    if (issue) { stopNavigation(); reportLocationError(locationIssueMessage(issue)); return; }
+    setGpsNow(Date.now());
     const latitude = next.coords.latitude;
     const longitude = next.coords.longitude;
     locationRef.current = next;
@@ -522,6 +545,8 @@ export function DeviceLocationModal({
     navigationActiveRef.current = false;
     setNavigationActive(false);
     setNavigationProgress(null);
+    let timedOut = false;
+    const routeTimer = setTimeout(() => { timedOut = true; controller.abort(); }, 8000);
     try {
       const url = `https://router.project-osrm.org/route/v1/driving/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?alternatives=true&steps=true&overview=full&geometries=geojson`;
       const response = await fetch(url, {
@@ -541,11 +566,12 @@ export function DeviceLocationModal({
       setPreviewRoute(selectedRoute?.id ?? null);
       return selectedRoute !== null;
     } catch (cause) {
-      if (requestId !== routingRequestId.current || controller.signal.aborted) return false;
-      const message = cause instanceof Error ? cause.message : "Unknown routing error.";
+      if (requestId !== routingRequestId.current || (controller.signal.aborted && !timedOut)) return false;
+      const message = timedOut ? "The route request timed out. Try again." : cause instanceof Error ? cause.message : "Unknown routing error.";
       setRouteError(`Unable to calculate a route. ${message}`);
       return false;
     } finally {
+      clearTimeout(routeTimer);
       if (requestId === routingRequestId.current) {
         routingController.current = null;
         setRouteLoading(false);
@@ -611,8 +637,10 @@ export function DeviceLocationModal({
         return null;
       }
 
-      const initial = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const initial = await withDeadline(Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }));
       if (!isCurrentRequest()) return null;
+      const initialIssue = positionIssue(initial, Date.now());
+      if (initialIssue) throw new Error(locationIssueMessage(initialIssue));
       updateLocation(initial);
       if (navigateAfterFix && plannedDestination) {
         const routeReady = await calculateRoutes(
@@ -692,6 +720,9 @@ export function DeviceLocationModal({
 
     void (async () => {
       try {
+        if (requireSavedSchoolLocation && (!schoolLocation || !isValidCoordinate(schoolLocation))) {
+          throw new Error("Saved school coordinates are unavailable. Search the school address or tap its destination on the map; verify any address match before navigating.");
+        }
         const schoolCoordinate = schoolLocation && isValidCoordinate(schoolLocation)
           ? schoolLocation
           : await geocodeAddress(`${schoolName}, ${schoolAddress}`);
@@ -718,7 +749,7 @@ export function DeviceLocationModal({
       cancelled = true;
       schoolLocationRequestId.current += 1;
     };
-  }, [screenPresented, schoolLocation, schoolName, schoolAddress]);
+  }, [screenPresented, schoolLocation, schoolName, schoolAddress, requireSavedSchoolLocation]);
 
   useEffect(() => {
     if (!screenPresented || schoolLoading || !schoolDestinationRef.current || !location || !destinationPoint) return;
@@ -926,6 +957,7 @@ export function DeviceLocationModal({
   return (
     <Modal visible={screenPresented} animationType="slide" onRequestClose={closeScreen} statusBarTranslucent>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1, backgroundColor: colors.background, paddingTop: insets.top }}>
+        {demoPreview ? <View style={{ padding: 10, backgroundColor: colors.primarySoft }}><T s={0.8} c={colors.primaryInk}>Phone GPS uses this device's real location. Demo pickup times and simulated positions are not used for this route. Trip sharing is disabled in Demo Mode.</T></View> : null}
         {navigationActive ? (
           <View style={{ minHeight: 86, paddingHorizontal: 16, paddingVertical: 12, flexDirection: "row", alignItems: "center", gap: 14, backgroundColor: colors.primary }}>
             <View style={{ width: 68, alignItems: "center", gap: 2 }}>
@@ -1107,6 +1139,12 @@ export function DeviceLocationModal({
               </View>
             ) : null}
 
+            {requireSavedSchoolLocation && !schoolLocation ? <View style={{ gap: 6 }}>
+              <T s={0.8} c={colors.warningInk}>School destination unavailable: no saved school pin. You can choose a point on the map or search and verify the school address.</T>
+              {schoolAddress.trim() ? <Btn kind="o" sm onPress={() => { clearRoutePlan(); setDestinationText(`${schoolName}, ${schoolAddress}`); setActiveSearch("destination"); }}>Use school address in route search</Btn> : null}
+            </View> : null}
+            {schoolDestinationRef.current && !schoolLocation ? <T s={0.78} c={colors.warningInk}>This school pin was found from an address and is unconfirmed. Verify the destination before navigating. It is not saved as a confirmed school pin.</T> : null}
+            {location && gpsNow - location.timestamp > LOCATION_POLICY.maxAgeMs ? <T s={0.8} c={colors.danger}>Last location is stale. It is not a current live position.</T> : null}
             {schoolLoading ? <T s={0.78} c="muted">Finding {schoolName} from the saved school details...</T> : null}
             {error ? (
               <View style={{ gap: 8 }}>
@@ -1232,7 +1270,7 @@ export function DeviceLocationModal({
             ) : (
               <T s={0.82} c="muted">Set a starting point and destination to see a route estimate.</T>
             )}
-            <TripSharing
+            {allowSharing ? <TripSharing
               visible={screenPresented}
               tracking={tracking}
               point={tracking && location ? {
@@ -1240,7 +1278,7 @@ export function DeviceLocationModal({
                 longitude: location.coords.longitude,
                 accuracy: location.coords.accuracy,
               } : null}
-            />
+            /> : null}
           </ScrollView>
         )}
       </KeyboardAvoidingView>

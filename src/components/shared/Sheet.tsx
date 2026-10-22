@@ -1,6 +1,6 @@
 // Bottom sheet from the HTML prototype: scrim fades in (250ms), the sheet rises with the drawer curve (380ms),
 // and both stay mounted while the 240ms close animation plays. Used instead of RN's built-in modal animations.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, View } from "react-native";
 import Animated, { useReducedMotion } from "react-native-reanimated";
@@ -14,6 +14,8 @@ import { Press, T } from "./ui";
 type SheetProps = {
   visible: boolean;
   onClose: () => void;
+  /** Called once the native sheet has fully dismissed, for sequential modal presentation. */
+  onExited?: () => void;
   title: string;
   closeLabel?: string;
   children: ReactNode;
@@ -21,16 +23,28 @@ type SheetProps = {
   footer?: ReactNode;
 };
 
-export function Sheet({ visible, onClose, title, closeLabel = "Close", children, footer }: SheetProps) {
+export function Sheet({ visible, onClose, title, closeLabel = "Close", children, footer, onExited }: SheetProps) {
   const { theme } = useAppContext();
   const c = theme.colors;
   const reduce = useReducedMotion();
   const insets = useSafeAreaInsets();
   const [mounted, setMounted] = useState(visible);
   const [closing, setClosing] = useState(false);
+  const presented = useRef(false);
+  const onExitedRef = useRef(onExited);
+  onExitedRef.current = onExited;
+  const finishExit = () => {
+    if (!presented.current) return;
+    presented.current = false;
+    onExitedRef.current?.();
+  };
+  useEffect(() => {
+    if (!mounted && Platform.OS !== "ios") finishExit();
+  }, [mounted]);
 
   useEffect(() => {
     if (visible) {
+      presented.current = true;
       setMounted(true);
       setClosing(false);
       return;
@@ -45,11 +59,11 @@ export function Sheet({ visible, onClose, title, closeLabel = "Close", children,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
-  if (!mounted) return null;
+  if (!mounted && !onExited) return null;
   const isClosing = closing || !visible;
 
   return (
-    <Modal visible transparent animationType="none" onRequestClose={onClose} statusBarTranslucent>
+    <Modal visible={mounted} onDismiss={finishExit} transparent animationType="none" onRequestClose={onClose} statusBarTranslucent>
       <View style={{ flex: 1 }}>
         <Animated.View
           style={[
