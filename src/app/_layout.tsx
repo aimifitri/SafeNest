@@ -10,6 +10,9 @@ import {
   useAppContext,
 } from "../components/shared/AppContext";
 import { AuthProvider, useAuth } from "../components/shared/AuthContext";
+import { HouseholdProvider } from "../components/shared/HouseholdContext";
+import { OnboardingFlow } from "../components/onboarding/OnboardingFlow";
+import { OnboardingProvider, useOnboarding } from "../components/onboarding/OnboardingContext";
 import { Btn } from "../components/shared/ui";
 import { T } from "../components/shared/ui";
 
@@ -17,9 +20,13 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <AppProvider>
-          <RootNavigator />
-        </AppProvider>
+        <HouseholdProvider>
+          <AppProvider>
+            <OnboardingProvider>
+              <RootNavigator />
+            </OnboardingProvider>
+          </AppProvider>
+        </HouseholdProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );
@@ -27,16 +34,17 @@ export default function RootLayout() {
 
 function RootNavigator() {
   const { selectedCaregiver, selectCaregiver, clearCaregiver, theme } = useAppContext();
-  const { session, loading, caregiver, accountError, retryAccount, signOut } = useAuth();
+  const { session, loading, caregiver, accountError, retryAccount, signOut, demo } = useAuth();
+  const onboarding = useOnboarding();
 
   useEffect(() => {
     if (caregiver && selectedCaregiver?.id !== caregiver.id) {
       selectCaregiver(caregiver);
     }
-    if (!session) {
+    if (!session && !demo) {
       clearCaregiver();
     }
-  }, [caregiver, selectedCaregiver?.id, session, selectCaregiver, clearCaregiver]);
+  }, [caregiver, selectedCaregiver?.id, session, demo, selectCaregiver, clearCaregiver]);
 
   if (loading) {
     return (
@@ -46,7 +54,7 @@ function RootNavigator() {
     );
   }
 
-  if (!session) return <LoginScreen />;
+  if (!session && !demo) return <LoginScreen />;
 
   if (!caregiver || selectedCaregiver?.id !== caregiver.id) {
     if (accountError) {
@@ -64,6 +72,8 @@ function RootNavigator() {
       </View>
     );
   }
+
+  if (onboarding.open && !demo) return <OnboardingFlow />;
 
   return (
     <Stack

@@ -1,205 +1,114 @@
-import { useState } from "react";
-import {
-  ActivityIndicator,
-  Image,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  View,
-} from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useRef, useState } from "react";
+import { View } from "react-native";
 
 import { useAuth } from "../shared/AuthContext";
-import { useAppContext } from "../shared/AppContext";
-import { Field, Input, Press, T } from "../shared/ui";
+import { checkEmail } from "../shared/accountRules";
+import { FormField, PasswordInput } from "../shared/forms";
+import { requestPasswordReset } from "../shared/profileApi";
+import { Banner, Btn, Err, Input, Press, T, useColors } from "../shared/ui";
+import { AuthFrame } from "./AuthFrame";
+import { SignupFlow } from "./SignupFlow";
 
-const LOGO = require("../../../assets/images/logo.png");
+type Mode = "login" | "signup" | "forgot";
 
 export function LoginScreen() {
-  const { signIn, signUp } = useAuth();
-  const { theme } = useAppContext();
-  const c = theme.colors;
-  const insets = useSafeAreaInsets();
-  const [isSignUp, setIsSignUp] = useState(false);
-  const [fullName, setFullName] = useState("");
+  const { signIn, enterDemo } = useAuth();
+  const c = useColors();
+  const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [confirmation, setConfirmation] = useState(false);
+  const [sent, setSent] = useState(false);
+  const submitting = useRef(false);
 
-  const submit = async () => {
+  const go = (m: Mode) => {
+    setMode(m);
     setError("");
-    setConfirmation(false);
-    if (isSignUp && !fullName.trim()) {
-      setError("Enter your full name.");
-      return;
-    }
-    if (!email.includes("@")) {
-      setError("Enter a valid email address.");
-      return;
-    }
-    if (password.length < 6) {
-      setError("Password must be at least 6 characters.");
-      return;
-    }
+    setSent(false);
+  };
 
+  const login = async () => {
+    if (submitting.current) return;
+    setError("");
+    const emailErr = checkEmail(email);
+    if (emailErr) return setError(emailErr);
+    if (!password) return setError("Enter your password.");
+    submitting.current = true;
     setBusy(true);
     try {
-      const result = isSignUp
-        ? await signUp(fullName.trim(), email.trim(), password)
-        : await signIn(email.trim(), password);
-      if (result.error) {
-        setError(result.error);
-      } else if ("needsConfirmation" in result && result.needsConfirmation) {
-        setConfirmation(true);
-      }
+      const res = await signIn(email.trim(), password);
+      if (res.error) setError(res.error);
     } catch {
       setError("Unable to connect. Please try again.");
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   };
 
-  const toggleMode = () => {
-    setIsSignUp((current) => !current);
+  const sendReset = async () => {
+    if (submitting.current) return;
     setError("");
-    setConfirmation(false);
+    submitting.current = true;
+    setBusy(true);
+    try {
+      const res = await requestPasswordReset(email);
+      if (res.ok) setSent(true);
+      else setError(res.error);
+    } finally {
+      submitting.current = false;
+      setBusy(false);
+    }
   };
 
+  if (mode === "signup") return <SignupFlow onBackToLogin={() => go("login")} />;
+
+  if (mode === "forgot") {
+    return (
+      <AuthFrame title="Reset your password" subtitle="We will email you a link if this address has an account.">
+        <FormField label="Email" required>
+          <Input value={email} onChangeText={setEmail} placeholder="you@example.com" autoCapitalize="none" autoComplete="email" keyboardType="email-address" textContentType="emailAddress" autoCorrect={false} returnKeyType="done" onSubmitEditing={() => void sendReset()} />
+        </FormField>
+        <Err text={error} />
+        {sent ? <Banner kind="ok">If that address has a SafeNest account, a reset link is on its way. Open it on this phone.</Banner> : null}
+        <Btn onPress={() => void sendReset()} loading={busy} label="Send reset link">Send reset link</Btn>
+        <T s={0.8} c="muted" lh={1.4} align="center">Reset emails only arrive if your team has email sending set up in Supabase.</T>
+        <Press onPress={() => go("login")} role="link" style={{ alignSelf: "center", minHeight: 44, justifyContent: "center" }}>
+          <T c={c.primaryInk} w={700} s={0.92}>Back to log in</T>
+        </Press>
+      </AuthFrame>
+    );
+  }
+
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        <ScrollView
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{
-            flexGrow: 1,
-            alignItems: "center",
-            justifyContent: "center",
-            paddingTop: Math.max(28, insets.top + 16),
-            paddingBottom: Math.max(28, insets.bottom + 16),
-            paddingHorizontal: 24,
-          }}
-        >
-          <Image
-            source={LOGO}
-            style={{ width: 72, height: 72, borderRadius: 36 }}
-            accessibilityLabel="SafeNest"
-          />
-          <View style={{ marginTop: 14 }}>
-            <T s={1.9} w={800} ls={-0.03} lh={1.15} align="center">
-              {isSignUp ? "Create your account" : "Welcome to SafeNest"}
-            </T>
-          </View>
-          <View style={{ marginTop: 6, marginBottom: 28 }}>
-            <T c="muted" align="center">
-              {isSignUp ? "Set up your family account." : "Log in to your family account."}
-            </T>
-          </View>
-
-          <View
-            style={{
-              width: "100%",
-              maxWidth: 440,
-              gap: 18,
-              padding: 22,
-              borderWidth: 1,
-              borderColor: c.line,
-              borderRadius: 24,
-              backgroundColor: c.card,
-              boxShadow: theme.colors.shadow,
-            }}
-          >
-            {isSignUp ? (
-              <Field label="Full name">
-                <Input
-                  value={fullName}
-                  onChangeText={setFullName}
-                  placeholder="Your name"
-                  autoCapitalize="words"
-                  autoComplete="name"
-                  textContentType="name"
-                  returnKeyType="next"
-                />
-              </Field>
-            ) : null}
-            <Field label="Email">
-              <Input
-                value={email}
-                onChangeText={setEmail}
-                placeholder="you@example.com"
-                autoCapitalize="none"
-                autoComplete="email"
-                keyboardType="email-address"
-                textContentType="emailAddress"
-                autoCorrect={false}
-                returnKeyType="next"
-              />
-            </Field>
-            <Field label="Password">
-              <Input
-                value={password}
-                onChangeText={setPassword}
-                placeholder="At least 6 characters"
-                secureTextEntry
-                autoCapitalize="none"
-                autoComplete={isSignUp ? "new-password" : "password"}
-                textContentType={isSignUp ? "newPassword" : "password"}
-                returnKeyType="done"
-                onSubmitEditing={() => void submit()}
-              />
-            </Field>
-
-            {error ? (
-              <T c={c.danger} s={0.92}>
-                {error}
-              </T>
-            ) : null}
-            {confirmation ? (
-              <T c={c.primaryInk} s={0.92}>
-                Check your email to confirm your account.
-              </T>
-            ) : null}
-
-            <Press
-              onPress={() => void submit()}
-              disabled={busy}
-              state={{ disabled: busy, busy }}
-              label={isSignUp ? "Create account" : "Log in"}
-              style={{
-                minHeight: 54,
-                alignItems: "center",
-                justifyContent: "center",
-                flexDirection: "row",
-                gap: 10,
-                borderRadius: 16,
-                backgroundColor: c.primary,
-                opacity: busy ? 0.65 : 1,
-              }}
-            >
-              {busy ? <ActivityIndicator color={c.onPrimary} /> : null}
-              <T c={c.onPrimary} w={700} s={1.02}>
-                {busy ? "Please wait..." : isSignUp ? "Create account" : "Log in"}
-              </T>
-            </Press>
-
-            <View style={{ flexDirection: "row", justifyContent: "center", flexWrap: "wrap" }}>
-              <T c="muted" s={0.92}>
-                {isSignUp ? "Already have an account? " : "New to SafeNest? "}
-              </T>
-              <Press onPress={toggleMode} disabled={busy} role="link">
-                <T c={c.primaryInk} w={700} s={0.92}>
-                  {isSignUp ? "Log in" : "Create account"}
-                </T>
-              </Press>
-            </View>
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </View>
+    <AuthFrame
+      title="Welcome to SafeNest"
+      subtitle="Log in to your family account."
+      footer={
+        <>
+          <Btn kind="o" onPress={enterDemo} label="Explore the demo with sample data">Explore the demo</Btn>
+          <T s={0.8} c="muted" align="center" lh={1.4}>Demo Mode uses made-up people. Nothing is saved and nobody is contacted.</T>
+        </>
+      }
+    >
+      <FormField label="Email">
+        <Input value={email} onChangeText={setEmail} placeholder="you@example.com" autoCapitalize="none" autoComplete="email" keyboardType="email-address" textContentType="emailAddress" autoCorrect={false} returnKeyType="next" />
+      </FormField>
+      <FormField label="Password">
+        <PasswordInput value={password} onChangeText={setPassword} placeholder="Your password" autoComplete="password" textContentType="password" returnKeyType="done" onSubmitEditing={() => void login()} />
+      </FormField>
+      <Press onPress={() => go("forgot")} role="link" style={{ alignSelf: "flex-start", minHeight: 36, justifyContent: "center" }}>
+        <T c={c.primaryInk} w={700} s={0.88}>Forgot password?</T>
+      </Press>
+      <Err text={error} />
+      <Btn onPress={() => void login()} loading={busy} label="Log in">{busy ? "Please wait..." : "Log in"}</Btn>
+      <View style={{ flexDirection: "row", justifyContent: "center", flexWrap: "wrap" }}>
+        <T c="muted" s={0.92}>New to SafeNest? </T>
+        <Press onPress={() => go("signup")} disabled={busy} role="link" style={{ minHeight: 24 }}>
+          <T c={c.primaryInk} w={700} s={0.92}>Create account</T>
+        </Press>
+      </View>
+    </AuthFrame>
   );
 }

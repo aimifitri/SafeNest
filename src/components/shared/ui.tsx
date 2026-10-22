@@ -64,10 +64,12 @@ type TProps = {
   style?: StyleProp<TextStyle>;
   lines?: number;
   tab?: boolean;
+  /** lets the person long-press to copy the text (invite codes) */
+  selectable?: boolean;
   children?: ReactNode;
 };
 
-export function T({ s = 1, w = 400, c, ls, lh, up, align, style, lines, tab, children }: TProps) {
+export function T({ s = 1, w = 400, c, ls, lh, up, align, style, lines, tab, selectable, children }: TProps) {
   const { theme } = useAppContext();
   const tone = useTone();
   const tc = toneColors(theme.colors, tone);
@@ -88,7 +90,7 @@ export function T({ s = 1, w = 400, c, ls, lh, up, align, style, lines, tab, chi
   // The app has its own text-size control. iOS Dynamic Type would multiply on top of it, so it is capped
   // (still honoured, but never enough to break layouts).
   return (
-    <Text style={[st, style]} numberOfLines={lines} maxFontSizeMultiplier={OS_FONT_CAP}>
+    <Text style={[st, style]} numberOfLines={lines} selectable={selectable} maxFontSizeMultiplier={OS_FONT_CAP}>
       {children}
     </Text>
   );

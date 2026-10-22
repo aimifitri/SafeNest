@@ -9,7 +9,7 @@ import * as E from "../shared/circleEngine";
 import type { CirclePerson, EscalationSettings } from "../shared/circleEngine";
 import { answer, dismissMinutes, sim, simInputs, travelMinutes, useSim } from "../shared/demoSim";
 import type { SimEnv } from "../shared/demoSim";
-import { mockData } from "../shared/mockData";
+import { useChildSchool } from "../shared/HouseholdContext";
 import { pickupDecision, usePickupDecision } from "../shared/pickupDecision";
 import { atMinutes, derivePickupFlow, minutesOfDay, parseClock, resolveCollector, predictedArrivalMinutes } from "../shared/pickupFlow";
 import type { ActionId, Eta, FlowCircle, FlowJourney, FlowRecipient, PickupFlow } from "../shared/pickupFlow";
@@ -33,15 +33,17 @@ export function usePickupFlow() {
   const { session } = useAuth();
   const simState = useSim();
   const decision = usePickupDecision();
+  const { child, school, household } = useChildSchool();
   const realMode = ctx.storedChildId !== null;
-  const simActive = !realMode || simState.forced;
+  // Sample simulation only in Demo Mode (or when the developer toggle forces it for a stored child). A real account
+  // with no child yet shows an empty Today instead of a simulated one.
+  const simActive = household.demo || (realMode && simState.forced);
   const realActive = realMode && !simActive;
 
   const journeyCtl = usePickupJourney(realActive ? ctx.storedChildId : null);
   const circleCtl = useCircleBroadcast(realActive ? ctx.storedChildId : null);
   const etaCtl = usePickupEta(ctx.schoolLocation, realActive);
 
-  const { child, school } = mockData;
   const caregiver = ctx.selectedCaregiver;
   const weekday = new Date().getDay();
   const weekdayKey = (weekday === 0 ? 1 : Math.min(weekday, 5)) as 1 | 2 | 3 | 4 | 5;
@@ -52,10 +54,11 @@ export function usePickupFlow() {
 
   // Everyone who could be asked: family and approved Trusted Circle members.
   const people: CirclePerson[] = useMemo(() => {
-    const family: CirclePerson[] = mockData.familyMembers.map((m) => ({ id: m.id, name: m.name, role: m.role, kind: "family", approved: true, nearby: false }));
+    // Family are listed, but only people with explicit pickup authorization count as approved. Demo family are all approved.
+    const family: CirclePerson[] = household.members.map((m) => ({ id: m.userId, name: m.name, role: m.relationship || "Family member", kind: "family", approved: household.demo || m.canCollect, nearby: false }));
     const circle: CirclePerson[] = ctx.trustedHelpers.map((h) => ({ id: h.id, name: h.name, role: h.role, kind: "circle", approved: h.state === "active", nearby: false }));
     return [...family, ...circle];
-  }, [ctx.trustedHelpers]);
+  }, [ctx.trustedHelpers, household.members, household.demo]);
   // The parent using the app is never asked. Match the mock family list by id or by name.
   const viewerName = caregiver?.name ?? "You";
   const viewerId = people.find((p) => p.id === caregiver?.id || p.name === caregiver?.name)?.id ?? caregiver?.id ?? "you";

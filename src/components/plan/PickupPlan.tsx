@@ -14,7 +14,10 @@ import { TimeWheelPicker } from "../shared/TimeWheel";
 import { StatusPill } from "../shared/StatusPill";
 import { clock } from "../shared/circleEngine";
 import { sim } from "../shared/demoSim";
-import { mockData } from "../shared/mockData";
+import { useAuth } from "../shared/AuthContext";
+import { EmptyState } from "../shared/forms";
+import { useSetupActions } from "../onboarding/SetupChecklist";
+import { useChildSchool } from "../shared/HouseholdContext";
 import { Banner, Btn, Dl, Err, Lead, Press, Rise, Row, Switch, T, Tag } from "../shared/ui";
 import { CircleRows } from "../today/CircleRows";
 import { usePickupFlow } from "../today/usePickupFlow";
@@ -37,7 +40,9 @@ export function PickupPlan() {
   // One shared answer for Today and Plan: who is collecting and who was asked.
   const pf = usePickupFlow();
   const colors = theme.colors;
-  const { child, school } = mockData;
+  const { child, school, hasChild, household } = useChildSchool();
+  const { profile } = useAuth();
+  const goSetup = useSetupActions();
   const weekdayNumber = new Date().getDay();
   const today: Weekday = (weekdayNumber === 0 ? 1 : Math.min(weekdayNumber, 5)) as Weekday;
   const todayLabel = weekdays.find((day) => day.key === today)?.label ?? "Today";
@@ -119,6 +124,26 @@ export function PickupPlan() {
   };
 
   const weeklyMode = editingWeekday !== null;
+
+  // A real account with no child yet has no schedule to show. Demo Mode keeps its sample plan.
+  if (!hasChild && !household.demo) {
+    const helper = profile?.accountType === "helper";
+    return (
+      <AppShell title="Pickup Plan" badge="Plan" activeTab="plan">
+        {!household.ready ? (
+          <T c="muted">Loading...</T>
+        ) : helper ? (
+          <EmptyState icon="plan" title="No pickup plan to show" body="The pickup plan belongs to the parent. When you are asked to collect a child, the details show on Today.">
+            <Btn onPress={() => goSetup("availability")} label="Set my availability">Set my availability</Btn>
+          </EmptyState>
+        ) : (
+          <EmptyState icon="plan" title="No pickup plan yet" body="Add your child and their school first. Then you can set the usual finish time for each weekday here.">
+            <Btn onPress={() => goSetup("child")} icon="plus" label="Add your first child">Add your first child</Btn>
+          </EmptyState>
+        )}
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell title="Pickup Plan" badge="Plan" activeTab="plan">
@@ -277,16 +302,16 @@ export function PickupPlan() {
         <T s={0.8} lh={1.4} c="muted">Only starts when SafeNest predicts you will be late and you have not answered. You can turn it off any time.</T>
       </Card>
 
-      <Disclosure title="Child and school details" sub={`${child.name}, ${child.age} · Class ${child.className}`}>
+      <Disclosure title="Child and school details" sub={[child.name, child.age !== null ? String(child.age) : "", child.className ? `Class ${child.className}` : ""].filter(Boolean).join(" · ")}>
         <Row first style={{ paddingTop: 0, paddingBottom: 6 }}>
           <Avatar name={child.name} size={44} />
           <View style={{ flex: 1, minWidth: 0 }}>
             <T s={1.1} w={800}>{child.name}</T>
-            <T s={0.84} c="muted" lh={1.35}>{child.age} years · Class {child.className}</T>
+            <T s={0.84} c="muted" lh={1.35}>{[child.age !== null ? `${child.age} years` : "", child.className ? `Class ${child.className}` : ""].filter(Boolean).join(" · ") || "Add details in Settings"}</T>
           </View>
         </Row>
         <Dl k="School" v={school.name} />
-        <Dl k="Address" v={school.address} />
+        <Dl k="Address" v={school.address || "Not added"} />
         <Dl k="Class teacher" v={school.teacher} />
       </Disclosure>
 
