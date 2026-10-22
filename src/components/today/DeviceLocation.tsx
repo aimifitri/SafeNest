@@ -293,6 +293,8 @@ function formatNavigationEta(seconds: number): string {
 export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLocationError }: DeviceLocationModalProps) {
   const {
     theme,
+    selectedCaregiver,
+    trustedHelpers,
     schoolLocation,
     weeklySchedule,
     temporaryDismissal,
@@ -347,6 +349,16 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   selectedRouteIdRef.current = selectedRouteId;
 
   const screenPresented = visible || autoPresented;
+  const mapPeople = [
+    ...mockData.familyMembers.map((person) => ({
+      id: person.id,
+      name: person.id === selectedCaregiver?.id ? selectedCaregiver.name : person.name,
+      kind: "family" as const,
+    })),
+    ...trustedHelpers
+      .filter((helper) => helper.state === "active")
+      .map((helper) => ({ id: helper.id, name: helper.name, kind: "helper" as const })),
+  ].filter((person, index, people) => people.findIndex((candidate) => candidate.id === person.id) === index);
   const currentCoordinates = parseCoordinates(currentLatitude, currentLongitude);
   const destinationCoordinates = parseCoordinates(destinationLatitude, destinationLongitude);
   const destinationPoint = destinationCoordinates.kind === "valid" ? destinationCoordinates.coordinate : null;
@@ -993,6 +1005,49 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
               >
                 <Icon name="x" size={20} color={colors.ink} stroke={2} />
               </Press>
+            </View>
+          ) : null}
+          {!navigationActive ? (
+            <View
+              accessibilityLabel="Map legend for home, parents and helpers, university, and school"
+              style={{
+                position: "absolute", left: 10, right: 10, bottom: 10, zIndex: 9,
+                paddingHorizontal: 12, paddingVertical: 10, gap: 8, borderRadius: 16,
+                backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line,
+                elevation: 8,
+              }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 9, minHeight: 28 }}>
+                <MaterialCommunityIcons name="home-outline" size={20} color={colors.primaryInk} />
+                <T s={0.8} w={700}>home</T>
+              </View>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 9, minHeight: 30 }}>
+                <MaterialCommunityIcons name="account-multiple" size={20} color={colors.primaryInk} />
+                <T s={0.8} w={700}>parents and helpers</T>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  {mapPeople.map((person, index) => {
+                    const avatarColor = colors.avatars[index % colors.avatars.length] ?? colors.primary;
+                    return (
+                      <View
+                        key={person.id}
+                        accessibilityLabel={`${person.name}, ${person.kind === "helper" ? "trusted helper" : "family member"}`}
+                        style={{ width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: avatarColor }}
+                      >
+                        <T s={0.68} w={800} c="#FFFFFF">{person.name.trim().charAt(0).toUpperCase()}</T>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 9, minHeight: 28 }}>
+                <MaterialCommunityIcons name="school-outline" size={20} color={colors.primaryInk} />
+                <T s={0.8} w={700}>university</T>
+              </View>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 9, minHeight: 28 }}>
+                <MaterialCommunityIcons name="domain" size={20} color={colors.danger} />
+                <T s={0.8} w={700}>school</T>
+              </View>
+              <T s={0.66} c="muted">Family icons show profiles; live locations are not available for family members.</T>
             </View>
           ) : null}
           {navigationActive && Platform.OS !== "web" ? (
