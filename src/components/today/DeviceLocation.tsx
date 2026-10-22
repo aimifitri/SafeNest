@@ -393,6 +393,12 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   }, [screenPresented]);
 
   useEffect(() => {
+    if (!visible) return;
+    setEstimateOpen(true);
+    setBackupNotice("");
+  }, [visible]);
+
+  useEffect(() => {
     const checkPickupTime = () => {
       const now = new Date();
       const day = now.getDay();
