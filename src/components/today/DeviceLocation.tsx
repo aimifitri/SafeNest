@@ -29,6 +29,9 @@ export type LiveLocationUpdate = {
 type DeviceLocationModalProps = {
   visible: boolean;
   onClose: () => void;
+  schoolName?: string;
+  schoolAddress?: string;
+  schoolLocation?: DeviceLocationCoordinate | null;
   onLocationUpdate?: (update: LiveLocationUpdate) => void;
   onLocationError?: (error: Error) => void;
 };
@@ -153,23 +156,6 @@ function makeManeuverInstruction(type: string, modifier: string | null, roadName
   if (type === "depart") return `Head toward${roadName ? ` ${roadName}` : " your destination"}`;
   if (modifier) return `Turn ${modifier}${road}`;
   return `Continue${road}`;
-}
-
-function parsePickupMinute(time: string): number | null {
-  const match = /^\s*(\d{1,2}):(\d{2})\s*(AM|PM)?\s*$/i.exec(time);
-  if (!match) return null;
-  let hour = Number(match[1]);
-  const minute = Number(match[2]);
-  const meridiem = match[3]?.toUpperCase();
-  if (!Number.isInteger(hour) || !Number.isInteger(minute) || minute > 59) return null;
-  if (meridiem) {
-    if (hour < 1 || hour > 12) return null;
-    hour %= 12;
-    if (meridiem === "PM") hour += 12;
-  } else if (hour > 23) {
-    return null;
-  }
-  return hour * 60 + minute;
 }
 
 function parseOsrmResponse(payload: unknown): PlannedRoute[] {
@@ -303,19 +289,22 @@ function formatNavigationEta(seconds: number): string {
   });
 }
 
-export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLocationError }: DeviceLocationModalProps) {
+export function DeviceLocationModal({
+  visible,
+  onClose,
+  schoolName = mockData.school.name,
+  schoolAddress = mockData.school.address,
+  schoolLocation: plannedSchoolLocation,
+  onLocationUpdate,
+  onLocationError,
+}: DeviceLocationModalProps) {
   const {
     theme,
     selectedCaregiver,
     trustedHelpers,
-    schoolLocation,
-    weeklySchedule,
-    temporaryDismissal,
-    requestBackupPickup,
-    backupBusy,
-    backupError,
-    backupRequest,
+    schoolLocation: contextSchoolLocation,
   } = useAppContext();
+  const schoolLocation = plannedSchoolLocation ?? contextSchoolLocation;
   const colors = theme.colors;
   const insets = useSafeAreaInsets();
   const subscription = useRef<LocationSubscription | null>(null);
@@ -328,7 +317,6 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   const navigationActiveRef = useRef(false);
   const schoolDestinationRef = useRef(false);
   const automaticRouteKeyRef = useRef<string | null>(null);
-  const automaticPromptDateRef = useRef<string | null>(null);
   const progressIndexRef = useRef(0);
   const callbacks = useRef({ onLocationUpdate, onLocationError });
   callbacks.current = { onLocationUpdate, onLocationError };
@@ -362,14 +350,11 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   const [schoolLoading, setSchoolLoading] = useState(false);
   const [navigationActive, setNavigationActive] = useState(false);
   const [navigationProgress, setNavigationProgress] = useState<NavigationProgress | null>(null);
-  const [autoPresented, setAutoPresented] = useState(false);
-  const [estimateOpen, setEstimateOpen] = useState(false);
-  const [backupNotice, setBackupNotice] = useState("");
 
   routeOptionsRef.current = routeOptions;
   selectedRouteIdRef.current = selectedRouteId;
 
-  const screenPresented = visible || autoPresented;
+  const screenPresented = visible;
   const mapPeople = [
     ...mockData.familyMembers.map((person) => ({
       id: person.id,
@@ -425,44 +410,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     setSchoolLoading(false);
     setNavigationActive(false);
     setNavigationProgress(null);
-    setEstimateOpen(false);
-    setBackupNotice("");
   }, [screenPresented]);
-
-  useEffect(() => {
-    if (!visible) return;
-    setEstimateOpen(true);
-    setBackupNotice("");
-  }, [visible]);
-
-  useEffect(() => {
-    const checkPickupTime = () => {
-      const now = new Date();
-      const day = now.getDay();
-      if (day < 1 || day > 5) return;
-      const weekday = day as 1 | 2 | 3 | 4 | 5;
-      const scheduledText = temporaryDismissal?.weekday === weekday
-        ? temporaryDismissal.time
-        : weeklySchedule[weekday];
-      const scheduledMinute = parsePickupMinute(scheduledText);
-      if (scheduledMinute === null || now.getHours() * 60 + now.getMinutes() < scheduledMinute) return;
-      const dateKey = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
-      if (automaticPromptDateRef.current === dateKey) return;
-      automaticPromptDateRef.current = dateKey;
-      setAutoPresented(true);
-      setEstimateOpen(true);
-    };
-
-    checkPickupTime();
-    const timer = setInterval(checkPickupTime, 30_000);
-    const listener = AppState.addEventListener("change", (state) => {
-      if (state === "active") checkPickupTime();
-    });
-    return () => {
-      clearInterval(timer);
-      listener.remove();
-    };
-  }, [temporaryDismissal, weeklySchedule]);
 
   useEffect(() => () => {
     starting.current = false;
@@ -746,12 +694,11 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
       try {
         const schoolCoordinate = schoolLocation && isValidCoordinate(schoolLocation)
           ? schoolLocation
-          : await geocodeAddress(`${mockData.school.name}, ${mockData.school.address}`);
+          : await geocodeAddress(`${schoolName}, ${schoolAddress}`);
         if (!isCurrentRequest()) return;
-        const schoolName = schoolLocation ? "Child's school" : mockData.school.name;
         setDestinationLatitude(schoolCoordinate.latitude.toFixed(6));
         setDestinationLongitude(schoolCoordinate.longitude.toFixed(6));
-        setDestinationText(schoolName);
+        setDestinationText(schoolLocation ? "Child's school" : schoolName);
         setActiveSearch(null);
         schoolDestinationRef.current = true;
         setSchoolLoading(false);
@@ -761,7 +708,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
         const reason = cause instanceof Error
           ? cause.message
           : "Unknown school geocoding error.";
-        const message = `Unable to locate ${mockData.school.name}. ${reason} Verify the school's saved address, or tap its exact location on the map and search again.`;
+        const message = `Unable to locate ${schoolName}. ${reason} Verify the school's saved address, or tap its exact location on the map and search again.`;
         setRouteError(message);
         callbacks.current.onLocationError?.(new Error(message));
       }
@@ -771,7 +718,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
       cancelled = true;
       schoolLocationRequestId.current += 1;
     };
-  }, [screenPresented, schoolLocation]);
+  }, [screenPresented, schoolLocation, schoolName, schoolAddress]);
 
   useEffect(() => {
     if (!screenPresented || schoolLoading || !schoolDestinationRef.current || !location || !destinationPoint) return;
@@ -900,8 +847,6 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
 
   const searchAndEstimate = async () => {
     Keyboard.dismiss();
-    setEstimateOpen(true);
-    setBackupNotice("");
     setRouteError("");
     setActiveSearch(null);
     try {
@@ -941,31 +886,10 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     }
   };
 
-  const closeEstimate = () => {
-    setEstimateOpen(false);
-    if (autoPresented) setAutoPresented(false);
-  };
-
   const closeScreen = () => {
     Keyboard.dismiss();
-    closeEstimate();
     stopNavigation();
     onClose();
-  };
-
-  const activateBackup = async () => {
-    setBackupNotice("");
-    try {
-      const activated = await requestBackupPickup();
-      setBackupNotice(activated
-        ? backupRequest.simulated
-          ? "Backup pickup preview activated. No helper was contacted."
-          : "Backup pickup request sent."
-        : "Unable to activate backup pickup. Check the pickup plan and try again.");
-    } catch (cause) {
-      const reason = cause instanceof Error ? cause.message : "Unknown backup request error.";
-      setBackupNotice(`Unable to activate backup pickup. ${reason}`);
-    }
   };
 
   const lastPlannerKey = useRef('');
@@ -1161,7 +1085,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
           >
             <NavigationSearch devicePoint={devicePoint} onRequestGPS={() => void startTracking()} onChange={applyNavigationSelection} />
             {previewOnly ? <T s={0.78} c="muted">Walking and cycling show a direct connection preview only. Road directions and ETA below are driving estimates; switch to Driving to start navigation.</T> : null}
-            {location ? <T s={0.76} c="muted">Accuracy: {location.coords.accuracy === null ? "Unknown" : `${Math.round(location.coords.accuracy)} m`} ? Updated {new Date(location.timestamp).toLocaleTimeString()} ? {tracking ? "Live" : "Stopped"}</T> : null}
+            {location ? <T s={0.76} c="muted">Accuracy: {location.coords.accuracy === null ? "Unknown" : `${Math.round(location.coords.accuracy)} m`} · Updated {new Date(location.timestamp).toLocaleTimeString()} · {tracking ? "Live" : "Stopped"}</T> : null}
             <Btn kind="o" onPress={() => tracking ? stopNavigation() : void startTracking()} disabled={busy}>{tracking ? "Stop GPS" : busy ? "Getting location..." : "Use my location"}</Btn>
             {activeSearch ? (
               <View style={{ borderRadius: 14, overflow: "hidden", borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card }}>
@@ -1183,7 +1107,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
               </View>
             ) : null}
 
-            {schoolLoading ? <T s={0.78} c="muted">Finding {mockData.school.name} from the saved school details...</T> : null}
+            {schoolLoading ? <T s={0.78} c="muted">Finding {schoolName} from the saved school details...</T> : null}
             {error ? (
               <View style={{ gap: 8 }}>
                 <T s={0.88} c={colors.danger} lh={1.35}>{error}</T>
@@ -1319,67 +1243,6 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
             />
           </ScrollView>
         )}
-
-        {estimateOpen ? (
-          <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center", paddingHorizontal: 18, paddingBottom: Math.max(insets.bottom, 18), backgroundColor: colors.scrim }}>
-            <View style={{ width: "100%", maxWidth: 440, padding: 20, borderRadius: 22, backgroundColor: colors.card, gap: 16, elevation: 12 }}>
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                <T s={1.15} w={800}>Pickup estimate</T>
-                <Press onPress={closeEstimate} label="Close pickup estimate" style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
-                  <Icon name="x" size={20} color={colors.ink} stroke={2} />
-                </Press>
-              </View>
-
-              <View style={{ minHeight: 112, alignItems: "center", justifyContent: "center", padding: 16, gap: 6, borderRadius: 16, backgroundColor: colors.primarySoft }}>
-                {routeLoading || busy || schoolLoading ? (
-                  <T s={0.98} w={700} c={colors.primaryInk} align="center">Calculating estimate...</T>
-                ) : selectedRoute ? (
-                  <>
-                    <T s={1.5} w={800} c={colors.primaryInk} align="center">
-                      {formatDistance(selectedRoute.distanceMeters)} · {formatDuration(selectedRoute.durationSeconds)}
-                    </T>
-                    <T s={0.88} w={700} c={colors.primaryInk} align="center">ETA {formatEta(selectedRoute.durationSeconds)}</T>
-                  </>
-                ) : (
-                  <T s={0.98} w={700} c={colors.primaryInk} align="center">Estimate location will show here</T>
-                )}
-              </View>
-
-              {routeError ? <T s={0.82} c={colors.danger} lh={1.35}>{routeError}</T> : null}
-              {backupNotice ? <T s={0.82} c={colors.primaryInk} lh={1.35}>{backupNotice}</T> : null}
-              {backupError ? <T s={0.82} c={colors.danger} lh={1.35}>{backupError}</T> : null}
-
-              <View style={{ flexDirection: "row", gap: 10 }}>
-                <Btn
-                  kind="p"
-                  flex
-                  onPress={() => {
-                    setEstimateOpen(false);
-                    void startNavigation();
-                  }}
-                  disabled={previewOnly || !routeReady || routeLoading || busy || !selectedRoute}
-                  loading={busy}
-                  label="Start navigation to the school"
-                >
-                  GO
-                </Btn>
-                <Btn
-                  kind="o"
-                  flex
-                  onPress={() => void activateBackup()}
-                  disabled={backupBusy}
-                  loading={backupBusy}
-                  label="Activate backup pickup"
-                >
-                  activate back up
-                </Btn>
-              </View>
-
-              <T s={0.82} w={800} c="muted" align="center" up>PICK UP "{mockData.child.name}" NOW</T>
-              <T s={0.7} c="muted" align="center">Route and arrival estimates are approximate; live traffic is not included.</T>
-            </View>
-          </View>
-        ) : null}
       </KeyboardAvoidingView>
     </Modal>
   );

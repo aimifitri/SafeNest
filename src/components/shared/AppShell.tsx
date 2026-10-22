@@ -14,6 +14,7 @@ import {
   Text,
   View,
 } from "react-native";
+import type { RefObject } from "react";
 import { useReducedMotion } from "react-native-reanimated";
 
 import * as Haptics from "expo-haptics";
@@ -49,6 +50,8 @@ type AppShellProps = {
   activeTab: TabId;
   // Optional back link above the title (Settings sub-pages, like the prototype's settings header).
   back?: { label: string; onPress: () => void };
+  scrollTargetRef?: RefObject<View | null>;
+  scrollRequest?: number;
 };
 
 // Icon names from Claude's icons.ts
@@ -228,12 +231,30 @@ export function AppShell({
   children,
   activeTab,
   back,
+  scrollTargetRef,
+  scrollRequest = 0,
 }: AppShellProps) {
   const scrollRef = useRef<ScrollView>(null);
   // A new page title (e.g. opening a Settings sub-page) starts at the top.
   useEffect(() => {
     scrollRef.current?.scrollTo({ y: 0, animated: false });
   }, [title]);
+  useEffect(() => {
+    if (!scrollRequest) return;
+    const scroll = scrollRef.current;
+    const target = scrollTargetRef?.current;
+    if (!scroll || !target) return;
+    const scrollElement = scroll.getNativeScrollRef();
+    if (!scrollElement) return;
+    const frame = requestAnimationFrame(() => {
+      target.measureLayout(
+        scrollElement,
+        (_x, y) => scroll.scrollTo({ y: Math.max(0, y - 12), animated: true }),
+        () => {},
+      );
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [scrollRequest, scrollTargetRef]);
   const { theme, trustedHelpers, selectedCaregiver } = useAppContext();
   const insets = useSafeAreaInsets();
   const router = useRouter();

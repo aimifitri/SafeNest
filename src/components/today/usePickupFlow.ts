@@ -61,7 +61,10 @@ export function usePickupFlow() {
   }, [ctx.trustedHelpers, household.members, household.demo]);
   // The parent using the app is never asked. Match the mock family list by id or by name.
   const viewerName = caregiver?.name ?? "You";
-  const viewerId = people.find((p) => p.id === caregiver?.id || p.name === caregiver?.name)?.id ?? caregiver?.id ?? "you";
+  const viewerId = session?.user.id
+    ?? people.find((p) => p.id === caregiver?.id || p.name === caregiver?.name)?.id
+    ?? caregiver?.id
+    ?? "you";
   const env: SimEnv = useMemo(
     () => ({ people, viewerId, viewerName, planDismiss, teacherName: school.teacher }),
     [people, viewerId, viewerName, planDismiss, school.teacher],
