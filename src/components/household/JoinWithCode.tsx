@@ -1,10 +1,11 @@
 import { useRef, useState } from "react";
 import { View } from "react-native";
 
+import { RealCircleInvitations } from "../circle/RealCircleInvitations";
 import { useAuth } from "../shared/AuthContext";
 import { useHousehold } from "../shared/HouseholdContext";
 import { FormField } from "../shared/forms";
-import { acceptFamilyInvite, acceptHelperInvite } from "../shared/householdApi";
+import { acceptFamilyInvite } from "../shared/householdApi";
 import { Banner, Btn, Err, Input, T } from "../shared/ui";
 
 /**
@@ -15,6 +16,7 @@ import { Banner, Btn, Err, Input, T } from "../shared/ui";
 export function JoinWithCode({ onJoined }: { onJoined?: () => void }) {
   const { retryAccount, demo } = useAuth();
   const household = useHousehold();
+  const [kind, setKind] = useState<"circle" | "family">("circle");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -30,14 +32,6 @@ export function JoinWithCode({ onJoined }: { onJoined?: () => void }) {
     setError("");
     setDone("");
     try {
-      const asHelper = await acceptHelperInvite(code);
-      if (asHelper.ok) {
-        setDone("You are now in their Trusted Circle. They can approve you, and you can ask for requests once approved.");
-        setCode("");
-        await household.refresh();
-        onJoined?.();
-        return;
-      }
       const asFamily = await acceptFamilyInvite(code);
       if (asFamily.ok) {
         setDone("You joined the household.");
@@ -47,7 +41,7 @@ export function JoinWithCode({ onJoined }: { onJoined?: () => void }) {
         return;
       }
       // Prefer the helper error unless the family function exists and gave a more useful answer.
-      setError(asFamily.missing ? asHelper.error : asFamily.error || asHelper.error);
+      setError(asFamily.error);
     } finally {
       lock.current = false;
       setBusy(false);
@@ -56,12 +50,16 @@ export function JoinWithCode({ onJoined }: { onJoined?: () => void }) {
 
   return (
     <View style={{ gap: 14 }}>
+      <Btn kind="o" disabled={busy} onPress={() => { setCode(""); setError(""); setDone(""); setKind(kind === "circle" ? "family" : "circle"); }}>{kind === "circle" ? "Use a household membership code instead" : "Use a Trusted Circle invitation instead"}</Btn>
+      {kind === "circle" ? <RealCircleInvitations /> : <>
+      <Banner>Household membership is separate from being a pending or approved Trusted Circle helper.</Banner>
       <FormField label="Invite code" hint="Paste the whole code your family member sent you.">
         <Input value={code} onChangeText={setCode} autoCapitalize="none" autoCorrect={false} placeholder="Paste code" accessibilityLabel="Invite code" returnKeyType="done" onSubmitEditing={() => void join()} />
       </FormField>
       <Err text={error} />
       {done ? <Banner kind="ok">{done}</Banner> : null}
       <Btn onPress={() => void join()} loading={busy} disabled={code.trim().length < 16} label="Join with code">Join</Btn>
+      </>}
     </View>
   );
 }

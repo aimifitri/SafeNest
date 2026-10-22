@@ -52,7 +52,7 @@ export function TodayDashboard() {
   const [mapOpen, setMapOpen] = useState(false);
   const [locationOpen, setLocationOpen] = useState(true);
   const readyHelpers = trustedHelpers.filter((helper) => helper.state === "active").length;
-  
+
   // Map dots (simulated map). The collector's dot follows the phase. In the demo a backup collector's marker moves
   // along the map while travelling (made-up progress, shown as simulated). In real mode nothing is tracked, so the
   // marker only jumps between "at home", "on the way" and "at school".

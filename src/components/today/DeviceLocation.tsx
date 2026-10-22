@@ -1,7 +1,7 @@
 import type { LocationObject, LocationSubscription } from "expo-location";
 import * as Location from "expo-location";
-import { useEffect, useRef, useState } from "react";
-import { AppState, Linking, Modal, Platform, ScrollView, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AppState, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, View } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -11,7 +11,9 @@ import { mockData } from "../shared/mockData";
 import { Btn, Input, Press, T } from "../shared/ui";
 import { DeviceLocationMap } from "./DeviceLocationMap";
 import type { DeviceLocationCoordinate, DeviceLocationPoint, RouteCoordinate } from "./DeviceLocationMap.types";
+import { NavigationSearch, type NavigationSelection } from "./NavigationSearch";
 import { TripSharing } from "./TripSharing";
+import { startBrowserLocation } from "./browserLocation";
 
 type SearchTarget = "start" | "destination";
 
@@ -345,6 +347,14 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   const [busy, setBusy] = useState(false);
   const [permissionBlocked, setPermissionBlocked] = useState(false);
   const [error, setError] = useState("");
+  const starting = useRef(false);
+  const manualOriginRef = useRef(false);
+  const [travelMode, setTravelMode] = useState<NavigationSelection["mode"]>("recommended");
+  const devicePoint = useMemo<DeviceLocationPoint | null>(() => location ? {
+    latitude: location.coords.latitude, longitude: location.coords.longitude,
+    accuracy: location.coords.accuracy, title: "Your location", detail: "This device's location",
+  } : null, [location]);
+  const previewOnly = travelMode === "walking" || travelMode === "biking";
   const [routeOptions, setRouteOptions] = useState<PlannedRoute[]>([]);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
@@ -376,6 +386,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
 
   useEffect(() => {
     if (screenPresented) return;
+    starting.current = false;
     trackingRequestId.current += 1;
     schoolLocationRequestId.current += 1;
     routingRequestId.current += 1;
@@ -390,6 +401,9 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     schoolDestinationRef.current = false;
     automaticRouteKeyRef.current = null;
     progressIndexRef.current = 0;
+    manualOriginRef.current = false;
+    lastPlannerKey.current = "";
+    setTravelMode("recommended");
     setLocation(null);
     setCurrentLatitude("");
     setCurrentLongitude("");
@@ -451,6 +465,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   }, [temporaryDismissal, weeklySchedule]);
 
   useEffect(() => () => {
+    starting.current = false;
     trackingRequestId.current += 1;
     routingRequestId.current += 1;
     routingController.current?.abort();
@@ -459,12 +474,14 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
 
   useEffect(() => {
     const listener = AppState.addEventListener("change", (state) => {
-      if (state !== "active") stopNavigation();
+      // Permission dialogs can briefly make iOS inactive.
+      if (state === "background") stopNavigation();
     });
     return () => listener.remove();
   }, []);
 
   const stopTracking = () => {
+    starting.current = false;
     trackingRequestId.current += 1;
     subscription.current?.remove();
     subscription.current = null;
@@ -509,10 +526,11 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     const longitude = next.coords.longitude;
     locationRef.current = next;
     setLocation(next);
-    setCurrentLatitude(latitude.toFixed(6));
-    setCurrentLongitude(longitude.toFixed(6));
-    setStartText("Current location");
-    setActiveSearch(null);
+    if (!manualOriginRef.current || navigationActiveRef.current) {
+      setCurrentLatitude(latitude.toFixed(6));
+      setCurrentLongitude(longitude.toFixed(6));
+      setStartText("Current location");
+    }
     const selectedRoute = routeOptionsRef.current.find((route) => route.id === selectedRouteIdRef.current);
     if (navigationActiveRef.current && selectedRoute) {
       const progress = getNavigationProgress(selectedRoute, { latitude, longitude }, progressIndexRef.current);
@@ -592,12 +610,13 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     plannedDestination?: DeviceLocationCoordinate,
     preferredRouteId?: string | null,
   ): Promise<DeviceLocationCoordinate | null> => {
-    if (busy || tracking) {
+    if (starting.current || tracking) {
       const current = locationRef.current;
       return current
         ? { latitude: current.coords.latitude, longitude: current.coords.longitude }
         : null;
     }
+    starting.current = true;
     const requestId = trackingRequestId.current + 1;
     trackingRequestId.current = requestId;
     const isCurrentRequest = () => requestId === trackingRequestId.current && screenPresented;
@@ -605,6 +624,27 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     setError("");
     setPermissionBlocked(false);
     try {
+      if (Platform.OS === "web") {
+        const watcher = await startBrowserLocation(
+          updateLocation,
+          (message) => { stopNavigation(); reportLocationError(message); },
+          isCurrentRequest,
+        );
+        if (!isCurrentRequest()) { watcher.remove(); return null; }
+        subscription.current?.remove();
+        subscription.current = watcher;
+        setTracking(true);
+        const current = locationRef.current;
+        const coordinate = current ? { latitude: current.coords.latitude, longitude: current.coords.longitude } : null;
+        if (navigateAfterFix && plannedDestination && coordinate) {
+          const ready = await calculateRoutes(coordinate, plannedDestination, preferredRouteId);
+          if (isCurrentRequest() && ready) {
+            navigationActiveRef.current = true;
+            setNavigationActive(true);
+          }
+        }
+        return coordinate;
+      }
       let permission = await Location.getForegroundPermissionsAsync();
       if (!isCurrentRequest()) return null;
       if (permission.status !== "granted") {
@@ -679,7 +719,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
       reportLocationError("Unable to get this phone's location. Check GPS availability and try again.", reason);
       return null;
     } finally {
-      if (isCurrentRequest()) setBusy(false);
+      if (isCurrentRequest()) { starting.current = false; setBusy(false); }
     }
   };
 
@@ -784,7 +824,8 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     : navigationProgress?.remainingMeters ?? 0;
 
   const startNavigation = async () => {
-    if (!routeReady || !destinationPoint || routeLoading || busy) return;
+    Keyboard.dismiss();
+    if (previewOnly || !routeReady || !destinationPoint || routeLoading || busy) return;
     setRouteError("");
     if (tracking && location) {
       const preferredRouteId = selectedRouteId;
@@ -820,9 +861,11 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   };
 
   const choosePlace = (target: SearchTarget, place: (typeof DEMO_PLACES)[number]) => {
+    Keyboard.dismiss();
     clearRoutePlan();
     const { latitude, longitude } = place.coordinate;
     if (target === "start") {
+      manualOriginRef.current = true;
       stopTracking();
       setLocation(null);
       setCurrentLatitude(latitude.toFixed(6));
@@ -842,6 +885,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     setActiveSearch(target);
     setPreviewRoute(null);
     if (target === "start") {
+      manualOriginRef.current = true;
       stopTracking();
       setLocation(null);
       setCurrentLatitude("");
@@ -855,6 +899,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   };
 
   const searchAndEstimate = async () => {
+    Keyboard.dismiss();
     setEstimateOpen(true);
     setBackupNotice("");
     setRouteError("");
@@ -902,6 +947,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
   };
 
   const closeScreen = () => {
+    Keyboard.dismiss();
     closeEstimate();
     stopNavigation();
     onClose();
@@ -922,11 +968,40 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
     }
   };
 
+  const lastPlannerKey = useRef('');
+  const applyNavigationSelection = useCallback((selection: NavigationSelection) => {
+    const manualOrigin = selection.origin?.title === "Your location" ? null : selection.origin;
+    const key = JSON.stringify([manualOrigin, selection.destination, selection.mode]);
+    if (key === lastPlannerKey.current) return;
+    const initialSelection = !lastPlannerKey.current;
+    lastPlannerKey.current = key;
+    if (initialSelection && !manualOrigin && !selection.destination && selection.mode === "recommended") return;
+    manualOriginRef.current = manualOrigin !== null;
+    setTravelMode(selection.mode);
+    // Device updates are handled by updateLocation; only explicit planner changes replace the route.
+    clearRoutePlan();
+    if (!initialSelection && !selection.destination) {
+      setDestinationLatitude("");
+      setDestinationLongitude("");
+      setDestinationText("");
+    }
+    if (selection.origin) {
+      setCurrentLatitude(selection.origin.latitude.toFixed(6));
+      setCurrentLongitude(selection.origin.longitude.toFixed(6));
+      setStartText(selection.origin.title);
+    }
+    if (selection.destination) {
+      setDestinationLatitude(selection.destination.latitude.toFixed(6));
+      setDestinationLongitude(selection.destination.longitude.toFixed(6));
+      setDestinationText(selection.destination.title);
+    }
+  }, []);
+
   const destinationSuggestions = activeSearch ? placesForSearch(activeSearch) : [];
 
   return (
     <Modal visible={screenPresented} animationType="slide" onRequestClose={closeScreen} statusBarTranslucent>
-      <View style={{ flex: 1, backgroundColor: colors.background, paddingTop: insets.top }}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1, backgroundColor: colors.background, paddingTop: insets.top }}>
         {navigationActive ? (
           <View style={{ minHeight: 86, paddingHorizontal: 16, paddingVertical: 12, flexDirection: "row", alignItems: "center", gap: 14, backgroundColor: colors.primary }}>
             <View style={{ width: 68, alignItems: "center", gap: 2 }}>
@@ -948,19 +1023,14 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
         ) : null}
 
         <View style={{ flex: 1, minHeight: 240, marginHorizontal: navigationActive ? 0 : 12, marginBottom: navigationActive ? 0 : 8, borderRadius: navigationActive ? 0 : 18, overflow: "hidden", backgroundColor: colors.map }}>
-          {Platform.OS === "web" ? (
-            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 8, backgroundColor: colors.map }}>
-              <MaterialCommunityIcons name="map-outline" size={34} color={colors.primary} />
-              <T s={0.92} w={700} align="center">Map preview</T>
-              <T s={0.8} c="muted" align="center">Interactive map and route drawing are available in the iOS and Android app.</T>
-            </View>
-          ) : currentPoint || destinationPoint ? (
+          {currentPoint || destinationPoint ? (
             <DeviceLocationMap
               point={currentPoint}
               destination={destinationPoint}
               destinationTitle={destinationText || "Destination"}
-              showPreview={displayedRoute !== null || previewRoute !== null}
-              routeCoordinates={displayedRoute?.coordinates}
+              showPreview={previewOnly || displayedRoute !== null || previewRoute !== null}
+              {...{ previewMode: travelMode }}
+              routeCoordinates={previewOnly ? undefined : displayedRoute?.coordinates}
               travelledCoordinates={navigationProgress?.travelledCoordinates}
               navigationActive={navigationActive}
               onSelectDestination={selectDestination}
@@ -1089,6 +1159,10 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
             keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
             contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: Math.max(insets.bottom, 18), gap: 12 }}
           >
+            <NavigationSearch devicePoint={devicePoint} onRequestGPS={() => void startTracking()} onChange={applyNavigationSelection} />
+            {previewOnly ? <T s={0.78} c="muted">Walking and cycling show a direct connection preview only. Road directions and ETA below are driving estimates; switch to Driving to start navigation.</T> : null}
+            {location ? <T s={0.76} c="muted">Accuracy: {location.coords.accuracy === null ? "Unknown" : `${Math.round(location.coords.accuracy)} m`} ? Updated {new Date(location.timestamp).toLocaleTimeString()} ? {tracking ? "Live" : "Stopped"}</T> : null}
+            <Btn kind="o" onPress={() => tracking ? stopNavigation() : void startTracking()} disabled={busy}>{tracking ? "Stop GPS" : busy ? "Getting location..." : "Use my location"}</Btn>
             {activeSearch ? (
               <View style={{ borderRadius: 14, overflow: "hidden", borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card }}>
                 {destinationSuggestions.length > 0 ? destinationSuggestions.map((place) => (
@@ -1212,7 +1286,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
                         </Btn>
                       </View>
                       {selected ? (
-                        <Btn kind="p" icon="drive" onPress={() => void startNavigation()} disabled={routeLoading || busy} loading={busy}>
+                        <Btn kind="p" icon="drive" onPress={() => void startNavigation()} disabled={previewOnly || routeLoading || busy} loading={busy}>
                           {busy ? "Starting GPS..." : "Start navigation"}
                         </Btn>
                       ) : null}
@@ -1283,7 +1357,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
                     setEstimateOpen(false);
                     void startNavigation();
                   }}
-                  disabled={!routeReady || routeLoading || busy || !selectedRoute}
+                  disabled={previewOnly || !routeReady || routeLoading || busy || !selectedRoute}
                   loading={busy}
                   label="Start navigation to the school"
                 >
@@ -1306,7 +1380,7 @@ export function DeviceLocationModal({ visible, onClose, onLocationUpdate, onLoca
             </View>
           </View>
         ) : null}
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

@@ -1,10 +1,10 @@
 import { useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import { View } from "react-native";
 
 import { SetupChecklist } from "../onboarding/SetupChecklist";
 import { HelperForm } from "../household/HelperForm";
-import { ShareCode } from "../household/ShareCode";
+
 import { AppShell } from "../shared/AppShell";
 import { useAppContext } from "../shared/AppContext";
 import { useAuth } from "../shared/AuthContext";
@@ -22,8 +22,13 @@ import { useChildSchool } from "../shared/HouseholdContext";
 import { mockData } from "../shared/mockData";
 import { setLocalPendingCount } from "../shared/pendingBadge";
 import { useFamilyAvailability } from "../shared/useAvailability";
-import { Banner, Btn, Chip, Err, Lead, Press, Rise, SmallBtn, T, Tag, useColors } from "../shared/ui";
+import { Banner, Btn, Chip, Err, Lead, Press, Rise, SmallBtn, T, Tag, Seg, useColors } from "../shared/ui";
 import { Icon } from "../navigation/Icon";
+import { RealCircleInvitations } from "./RealCircleInvitations";
+import { AccountJoinedCircles } from "./AccountJoinedCircles";
+import { InvitationSheet } from "./InvitationSheet";
+import { JoinedCircles } from "./JoinedCircles";
+import { canManageDemoInvitations, circleDemoReducer, createCircleDemoState, DEMO_PERSONAS, type DemoActor } from "./circleDemo";
 
 // Circle manages who can help. The active backup pickup (request, answers, confirmation) lives on Today.
 // A real account sees only the people stored for its own household. Demo Mode shows made-up people and saves nothing.
@@ -39,7 +44,7 @@ const DEMO_AVAILABILITY: Record<string, { on: boolean; until: string }> = {
 
 type Person = { id: string; userId: string | null; name: string; role: string; phone: string; approved: boolean; joined: boolean; kind: "family" | "helper"; canCollect?: boolean };
 
-export function TrustedCircle() {
+function HouseholdCircle() {
   const { theme, selectedCaregiver } = useAppContext();
   const { profile, isAdmin } = useAuth();
   const { child, hasChild, household: h } = useChildSchool();
@@ -51,7 +56,6 @@ export function TrustedCircle() {
   const [error, setError] = useState("");
   const [openIds, setOpenIds] = useState<Record<string, boolean>>({});
   const [addOpen, setAddOpen] = useState(false);
-  const [codes, setCodes] = useState<Record<string, string>>({});
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   // Demo-only local state (Demo Mode keeps the original on-screen toggles).
   const [demoAvail, setDemoAvail] = useState(DEMO_AVAILABILITY);
@@ -104,25 +108,18 @@ export function TrustedCircle() {
     else setError(("error" in r && r.error) || "That did not work.");
   };
 
-  const makeCode = async (p: Person) => {
-    setError("");
-    const r = await h.helperInviteCode(p.id);
-    if (r.ok) setCodes((cur) => ({ ...cur, [p.id]: r.data }));
-    else setError(r.error);
-  };
-
   const phoneOf = (p: Person) => p.phone || "Phone not shared";
   const isDemoCollector = (p: Person) => h.demo && p.id === mockData.pickupStatus.collectorId;
 
   if (!h.ready) {
     return (
-      <AppShell title="Trusted Circle" badge="Circle" activeTab="circle">
+      <View style={{ gap: 12 }}>
         <T c="muted">Loading your circle...</T>
-      </AppShell>
+      </View>
     );
   }
 
-  const renderAddSheet = () => (
+  const renderAddSheet = () => h.demo ? (
       <Sheet visible={addOpen} onClose={() => setAddOpen(false)} title="Add a helper" closeLabel="Close add helper dialog">
         <T c="muted" lh={1.4}>{h.demo ? "Demo Mode: this adds a made-up pending person on screen only." : "They are added as pending. Approving them is a separate step, and they can only answer requests after they join with a code."}</T>
         <HelperForm
@@ -137,26 +134,26 @@ export function TrustedCircle() {
           }}
         />
       </Sheet>
-    );
+    ) : null;
 
   // Nothing set up: say so, do not invent people.
   if (!h.demo && !hasChild && h.helpers.length === 0) {
     return (
-      <AppShell title="Trusted Circle" badge="Circle" activeTab="circle">
+      <View style={{ gap: 12 }}>
         {error || h.error ? <Err text={error || h.error || ""} /> : null}
         <EmptyState icon="circle" title="Your Trusted Circle is empty" body={caps.inviteHelpers ? "These are the adults who may collect your child if you cannot. Nobody is added for you, and nobody is approved until you say so." : "A parent will add you to their Trusted Circle. Then you can say when you are free."}>
-          {caps.inviteHelpers ? <Btn onPress={() => setAddOpen(true)} icon="userplus" label="Add your first helper">Add your first helper</Btn> : (
+          {h.demo && caps.inviteHelpers ? <Btn onPress={() => setAddOpen(true)} icon="userplus" label="Add your first helper">Add your first helper</Btn> : (
             <Btn onPress={() => router.push({ pathname: "/settings", params: { page: "household" } })} label="Join with an invite code">Join with an invite code</Btn>
           )}
         </EmptyState>
         <SetupChecklist />
         {renderAddSheet()}
-      </AppShell>
+      </View>
     );
   }
 
   return (
-    <AppShell title="Trusted Circle" badge="Circle" activeTab="circle">
+    <View style={{ gap: 12 }}>
       <Lead>{hasChild ? `Who can collect ${child.name}. Tap a name for details.` : "Who can collect your child. Tap a name for details."}</Lead>
       {notice ? <Banner key={notice} kind="ok">{notice}</Banner> : null}
       <Err text={error || h.error || ""} />
@@ -171,11 +168,11 @@ export function TrustedCircle() {
                   <Avatar name={p.name} size={44} />
                   <View style={{ flexGrow: 1, flexShrink: 1, flexBasis: 150, minWidth: 0 }}>
                     <T w={700}>{p.name}</T>
-                    <T s={0.84} c="muted" lh={1.35}>{p.role} · {phoneOf(p)}</T>
+                    <T s={0.84} c="muted" lh={1.35}>{p.role} Â· {phoneOf(p)}</T>
                   </View>
                   <StatusPill label="Pending" tone="warning" />
                 </View>
-                {caps.approveHelpers || h.demo ? (
+                {h.demo ? (
                   <>
                     <T s={0.84} c="muted" lh={1.4}>Approving lets SafeNest ask {p.name} to collect {hasChild ? child.name : "your child"}. The teacher still checks who arrives.</T>
                     <View style={{ flexDirection: "row", gap: 10 }}>
@@ -184,13 +181,8 @@ export function TrustedCircle() {
                     </View>
                   </>
                 ) : (
-                  <T s={0.84} c="muted" lh={1.4}>A family admin needs to approve this person.</T>
+                  <T s={0.84} c="muted" lh={1.4}>Acceptance and identity review are required. Use the secure real-account panel above to approve. Rejection is not connected.</T>
                 )}
-                {!h.demo && caps.inviteHelpers ? (
-                  codes[p.id] ? <ShareCode code={codes[p.id]} who={p.name} kind="helper" /> : (
-                    <Btn kind="s" sm onPress={() => void makeCode(p)} label={`Create a join code for ${p.name}`}>{p.joined ? "New join code" : "Create join code"}</Btn>
-                  )
-                ) : null}
               </View>
             ))}
           </Card>
@@ -202,11 +194,11 @@ export function TrustedCircle() {
         {approved.length ? approved.map((p, i) => renderMember(p, i)) : (
           <View style={{ paddingVertical: 16, gap: 6 }}>
             <T s={0.92} c="muted" lh={1.4}>No approved helpers yet.</T>
-            {caps.inviteHelpers ? <T s={0.84} c="muted" lh={1.4}>Add a helper, then approve them. Only approved helpers can be asked.</T> : null}
+            {caps.inviteHelpers ? <T s={0.84} c="muted" lh={1.4}>Use the secure panel above to invite a helper and review their acceptance. Only approved helpers can be asked.</T> : null}
           </View>
         )}
       </Card>
-      {caps.inviteHelpers ? <SecondaryButton label="+ Add New Helper" onPress={() => setAddOpen(true)} /> : null}
+      {h.demo && caps.inviteHelpers ? <SecondaryButton label="+ Add New Helper" onPress={() => setAddOpen(true)} /> : null}
 
       {!h.demo && caps.manageChildren && approved.length > 0 ? (
         <>
@@ -249,9 +241,9 @@ export function TrustedCircle() {
       >
         <T c="muted" lh={1.4}>Choose when your availability ends.</T>
         <TimeWheelPicker value={selectedTime} onChange={setSelectedTime} />
-        <T s={0.85} c="muted" align="center">Demo only · No real notification is sent.</T>
+        <T s={0.85} c="muted" align="center">Demo only Â· No real notification is sent.</T>
       </Sheet>
-    </AppShell>
+    </View>
   );
 
   function renderMember(p: Person, index: number) {
@@ -300,7 +292,7 @@ export function TrustedCircle() {
                     <SmallBtn role="switch" checked={demoAvail[p.id]?.on ?? false} tone={demoAvail[p.id]?.on ? "on" : "off"} label="My pickup availability" hint="Toggle your own availability for pickup." onPress={() => setDemoAvail((cur) => ({ ...cur, [p.id]: { on: !(cur[p.id]?.on ?? false), until: cur[p.id]?.until || "3:00 PM" } }))}>
                       {demoAvail[p.id]?.on ? "Available" : "Busy"}
                     </SmallBtn>
-                    {demoAvail[p.id]?.on ? <SmallBtn tone="on" label="Set my pickup availability" onPress={() => { setSelectedTime(demoAvail[p.id]?.until || "3:00 PM"); setTimePicker(true); }}>{`Until ${demoAvail[p.id]?.until || "3:00 PM"} · Change`}</SmallBtn> : null}
+                    {demoAvail[p.id]?.on ? <SmallBtn tone="on" label="Set my pickup availability" onPress={() => { setSelectedTime(demoAvail[p.id]?.until || "3:00 PM"); setTimePicker(true); }}>{`Until ${demoAvail[p.id]?.until || "3:00 PM"} Â· Change`}</SmallBtn> : null}
                   </>
                 ) : (
                   <SmallBtn tone="on" icon="clock" label="Edit my pickup availability" onPress={() => router.push({ pathname: "/settings", params: { page: "availability" } })}>Edit my availability</SmallBtn>
@@ -315,7 +307,7 @@ export function TrustedCircle() {
                   {isPrimary ? "Primary contact" : "Make primary contact"}
                 </SmallBtn>
               ) : null}
-              {p.kind === "helper" && (caps.approveHelpers || h.demo) ? (
+              {p.kind === "helper" && h.demo ? (
                 confirmRemove === p.id ? (
                   <SmallBtn tone="danger" label={`Confirm removing ${p.name}`} onPress={() => { setConfirmRemove(null); void act(() => h.removeHelper(p.id), `${p.name} was removed from the Trusted Circle.`); }}>Tap again to remove</SmallBtn>
                 ) : (
@@ -328,4 +320,38 @@ export function TrustedCircle() {
       </View>
     );
   }
+}
+
+// Keep real account operations separate from the explicit, nonpersistent demo.
+export function TrustedCircle() {
+  const { session, demo } = useAuth();
+  return <CombinedCircle key={`${session?.user.id ?? "signed-out"}:${demo}`} />;
+}
+function CombinedCircle() {
+  const { demo } = useAuth();
+  const [tab, setTab] = useState<"household" | "joined" | "simulation">("household");
+  return <AppShell title="Trusted Circle" badge="Circle" activeTab="circle">
+    {demo ? <Banner>Demo Mode: household and invitation examples are fictional and never change an account.</Banner> : <>
+      <RealCircleInvitations />
+      <Banner>Real helper creation and approval use the secure panel above. Legacy direct helper edits, rejection and removal are unavailable until a reviewed backend contract supports them. Refresh the household roster after approving a request.</Banner>
+    </>}
+    <Seg<"household" | "joined" | "simulation"> cur={tab} onPick={setTab} opts={[
+      { value: "household", label: "MY CIRCLE", a11y: "Household Circle" }, { value: "joined", label: "JOINED CIRCLES", a11y: "Joined Circles" },
+      ...(demo ? [{ value: "simulation" as const, label: "INVITATION DEMO", a11y: "Fictional invitation demo" }] : []),
+    ]} />
+    {tab === "household" ? <HouseholdCircle /> : tab === "joined" ? demo ? <DemoInvitations /> : <AccountJoinedCircles /> : <DemoInvitations />}
+  </AppShell>;
+}
+function DemoInvitations() {
+  const [personaId, setPersonaId] = useState<DemoActor["id"]>("abu");
+  const [state, dispatch] = useReducer(circleDemoReducer, undefined, createCircleDemoState);
+  const [open, setOpen] = useState(false);
+  const actor = DEMO_PERSONAS.find(person => person.id === personaId) ?? DEMO_PERSONAS[0];
+  return <View style={{ gap: 12 }}>
+    <Banner>Fictional Abu/Siti invitation simulation only. No real tokens, accounts or pickup grants are created.</Banner>
+    <Seg<DemoActor["id"]> cur={personaId} onPick={id => { setPersonaId(id); setOpen(false); }} opts={DEMO_PERSONAS.map(person => ({ value: person.id, label: person.name, a11y: `Fictional persona ${person.name}` }))} />
+    {canManageDemoInvitations(actor) ? <Btn onPress={() => setOpen(true)}>Open demo invitation</Btn> : <T c="muted">Select Abu to generate and simulate approval; select Siti to view the resulting demo membership.</T>}
+    <JoinedCircles personaName={actor.name} memberships={state.memberships.filter(membership => membership.userId === actor.id)} onLeave={membershipId => dispatch({ type: "leave", userId: actor.id, membershipId })} />
+    <InvitationSheet key={actor.id} visible={open && canManageDemoInvitations(actor)} onClose={() => setOpen(false)} actor={actor} state={state} onGenerate={() => dispatch({ type: "generate", actor })} onAccept={() => dispatch({ type: "accept", actor })} onApprove={() => dispatch({ type: "approve", actor })} />
+  </View>;
 }

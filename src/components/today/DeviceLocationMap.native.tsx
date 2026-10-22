@@ -2,6 +2,9 @@ import MapView, { Circle, Marker, Polyline } from "react-native-maps";
 import type { Region } from "react-native-maps";
 import { useEffect, useRef, useState } from "react";
 
+import { useAppContext } from "../shared/AppContext";
+import type { TravelMode } from "./NavigationSearch";
+export type { DeviceLocationPoint } from "./DeviceLocationMap.types";
 import type { DeviceLocationMapProps } from "./DeviceLocationMap.types";
 
 function initialRegion({ point, destination }: DeviceLocationMapProps): Region {
@@ -31,7 +34,9 @@ export function DeviceLocationMap({
   travelledCoordinates,
   navigationActive,
   onSelectDestination,
-}: DeviceLocationMapProps) {
+  previewMode,
+}: DeviceLocationMapProps & { previewMode?: TravelMode }) {
+  const { theme } = useAppContext();
   const mapRef = useRef<MapView | null>(null);
   const [mapReady, setMapReady] = useState(false);
 
@@ -80,6 +85,7 @@ export function DeviceLocationMap({
       initialRegion={initialRegion({ point, destination })}
       onMapReady={() => setMapReady(true)}
       onPress={(event) => onSelectDestination?.(event.nativeEvent.coordinate)}
+      userInterfaceStyle={theme.isDark ? "dark" : "light"}
       showsCompass
       showsScale
       accessibilityLabel="Map with current location and destination"
@@ -119,7 +125,8 @@ export function DeviceLocationMap({
         <Polyline
           coordinates={[{ latitude: point.latitude, longitude: point.longitude }, destination]}
           geodesic
-          strokeColor="#0F7D86"
+          lineDashPattern={previewMode === "walking" ? [4, 8] : [12, 8]}
+          strokeColor={previewMode === "walking" || previewMode === "biking" ? "#218975" : "#208AEF"}
           strokeWidth={4}
         />
       ) : null}
