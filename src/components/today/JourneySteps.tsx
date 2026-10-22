@@ -54,7 +54,7 @@ export function JourneySteps({
     return (
       <View style={{ gap: 10 }}>
         <Btn kind="p" disabled={busy} onPress={() => setConfirming(true)}>
-          I've collected {childName}
+          I've picked up {childName}
         </Btn>
         <Btn kind="o" disabled={busy} onPress={onCancel}>
           Cancel journey

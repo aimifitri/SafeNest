@@ -50,7 +50,7 @@ export function TodayDashboard() {
   // Map dots (simulated map). The collector's dot follows the phase. In the demo a backup collector's marker moves
   // along the map while travelling (made-up progress, shown as simulated). In real mode nothing is tracked, so the
   // marker only jumps between "at home", "on the way" and "at school".
-  const atSchoolPhases = ["at_school", "teacher_pending", "handover_pending", "teacher_rejected", "collected"];
+  const atSchoolPhases = ["at_school", "collected"];
   const place = flow.phase === "travelling" || flow.phase === "helper_assigned" ? "road" : atSchoolPhases.includes(flow.phase) ? "school" : "office";
   const collected = flow.phase === "collected";
   const helperCollector = collector.kind !== "parent";
@@ -66,7 +66,7 @@ export function TodayDashboard() {
     }
     return { id: person.id, name: person.name, x: xy[0], y: xy[1], ring: isCollector && !collected, hidden: isCollector && collected };
   });
-  const banner = usePickupBanner({ phase: flow.phase, collector: collector.name, childName: child.name, teacher: school.teacher, simulated: pf.simActive, whenLabel: `Collected at ${clock(pf.nowMin)}` });
+  const banner = usePickupBanner({ phase: flow.phase, collector: collector.name, childName: child.name, simulated: pf.simActive, whenLabel: `Picked up at ${clock(pf.nowMin)}` });
   const mapNote = flow.phase === "travelling" && pf.simActive ? "Simulated movement" : "Simulated map";
 
   return (

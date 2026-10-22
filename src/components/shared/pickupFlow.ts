@@ -5,7 +5,7 @@
 // No React, no network, so every phase can be tested on its own.
 //
 // Rules, in order (the first that applies wins). They follow the approved HTML prototype:
-//   1. A pickup journey exists            -> travelling / at school / teacher check / collected
+//   1. A pickup journey exists            -> travelling / at school / collected
 //   2. A request round exists             -> someone accepted (assigned) / asking everyone / nobody can
 //   3. The parent said they will collect  -> will collect
 //   4. Otherwise location + travel time   -> needs location / checking / unavailable / on time / late / ask now
@@ -107,9 +107,6 @@ export type PickupPhase =
   | "helper_assigned"
   | "travelling"
   | "at_school"
-  | "teacher_pending"
-  | "handover_pending"
-  | "teacher_rejected"
   | "collected";
 
 export type ActionId =
@@ -130,8 +127,6 @@ export type ActionId =
   // Demo only. They exist only while the whole pickup is simulated, and never write to Supabase.
   | "demo_depart"
   | "demo_arrive"
-  | "demo_teacher_ok"
-  | "demo_teacher_no"
   | "demo_handover";
 
 /** Actions that only open a sheet in the app. They never change anything by themselves. */
@@ -155,7 +150,7 @@ export type PickupFlow = {
   secondary: FlowAction | null;
   /** Smaller actions kept behind "More options". */
   more: FlowAction[];
-  /** Demo-only buttons for this exact step (collector sets off, arrives, teacher says OK or no, handover). Empty outside the demo. */
+  /** Demo-only buttons for this exact step (collector sets off, arrives, says the child is picked up). Empty outside the demo. */
   demoActions: FlowAction[];
   /** Progress of a backup collector's pickup. Null when the parent collects or no helper is involved. */
   steps: FlowStep[] | null;
@@ -269,8 +264,8 @@ const reasonText = (reason: FlowCircle["reason"], deadline: string): string =>
   : reason === "" ? ""
   : "You asked your circle.";
 
-const STEP_LABELS = ["Asked", "Accepted", "Travelling", "At school", "Teacher check", "Handover"] as const;
-/** Progress bar for a backup collector. `at` = index of the current step (0-5, 6 = all done). */
+const STEP_LABELS = ["Asked", "Accepted", "Travelling", "At school", "Picked up"] as const;
+/** Progress bar for a backup collector. `at` = index of the current step (0-4, 5 = all done). */
 export function helperSteps(at: number, failedAt: number | null = null): FlowStep[] {
   return STEP_LABELS.map((label, i): FlowStep => ({ label, state: failedAt === i ? "failed" : i < at ? "done" : i === at ? "current" : "todo" }));
 }
@@ -309,8 +304,8 @@ export function derivePickupFlow(input: FlowInput): PickupFlow {
   const recipients = circle?.recipients ?? [];
   const askBackup = act("find_backup", "Find trusted backup");
   const sendPhoto = (label = "Send photo to teacher") => act("prepare_teacher", label);
-  const teacherWaiting = input.teacher === "awaitingTeacher" || input.teacher === "photoPrepared";
-  const photoSent = input.teacher === "awaitingTeacher" || input.teacher === "approved";
+  // The teacher compares the photo at the gate and tells the parent personally. The app only knows if the photo was sent.
+  const photoSent = input.teacher === "awaitingTeacher";
 
   // 1. A journey exists.
   if (journey) {
@@ -323,68 +318,33 @@ export function derivePickupFlow(input: FlowInput): PickupFlow {
     const collectorFact: Fact = { label: "Collector", value: journey.collectorIsViewer ? "You" : journey.collectorName };
 
     if (journey.state === "collected") {
-      if (input.teacher === "rejected") {
-        return { ...base, ...rows, phase: "teacher_rejected", tone: "danger", status: "Teacher said no", headline: `${teacherName} did not approve this collector`, detail: `${whoName} recorded the handover of ${childName}, but the teacher check was rejected. Contact the school now.`, facts: [collectorFact, { label: "Teacher check", value: "Rejected" }], steps: helper ? helperSteps(4, 4) : null, showCollector: helper };
-      }
-      if (teacherWaiting) {
-        return { ...base, ...rows, phase: "teacher_pending", tone: "warning", status: "Teacher check pending", headline: `Waiting for ${teacherName} to confirm`, detail: `${whoName} recorded the handover of ${childName}. ${teacherName} has not confirmed yet.`, facts: [collectorFact, { label: "Teacher check", value: "Pending" }], steps: helper ? helperSteps(4) : null, showCollector: helper };
-      }
-      const confirmed = input.teacher === "approved";
       const when = journey.endedAt ? ` at ${formatClock(journey.endedAt)}` : "";
       return {
-        ...base, ...rows, phase: "collected", tone: "success", status: "Collected",
-        headline: `${childName} has been collected`,
-        detail: `${demoTag}${journey.collectorName} collected ${childName}${when}. ${confirmed ? `${teacherName} confirmed the collector${simulated ? " in this demo" : ""}.` : `Confirmed by ${journey.collectorName}. The school has not verified it.`}`,
-        facts: [{ label: "Collected by", value: journey.collectorName, note: journey.endedAt ? `at ${formatClock(journey.endedAt)}` : undefined }, { label: "Teacher check", value: confirmed ? "Approved" : "Not used" }],
-        steps: helper ? helperSteps(6) : null, showCollector: helper,
+        ...base, ...rows, phase: "collected", tone: "success", status: "Picked up",
+        headline: `${childName} has been picked up`,
+        detail: `${demoTag}${journey.collectorName} picked up ${childName}${when}. Confirmed by ${journey.collectorName}. The school does not confirm it in the app.`,
+        facts: [{ label: "Collector", value: journey.collectorName, note: journey.endedAt ? `at ${formatClock(journey.endedAt)}` : undefined }],
+        steps: helper ? helperSteps(5) : null, showCollector: helper,
       };
     }
 
     if (journey.state === "at_school") {
-      if (input.teacher === "rejected") {
-        return {
-          ...base, ...rows, phase: "teacher_rejected", tone: "danger", status: "Teacher said no",
-          headline: `${teacherName} did not approve ${journey.collectorName}`,
-          detail: `${demoTag}${childName} has NOT been handed over and stays at school. ${simulated ? "Demo notification: " : ""}You have been told. Choose what happens next.`,
-          facts: [collectorFact, { label: "Teacher check", value: "Rejected" }],
-          primary: simulated ? act("come_myself", "I will come myself") : null,
-          secondary: simulated ? act("ask_again", "Ask everyone else") : null,
-          more: [],
-          note: simulated ? `${journey.collectorName} will not be asked again today. Nothing is collected until a new collector is approved.` : `Contact the school. ${childName} should not leave with ${journey.collectorName}.`,
-          steps: helper ? helperSteps(4, 4) : null, showCollector: helper,
-        };
-      }
-      if (input.teacher === "approved") {
-        return {
-          ...base, ...rows, phase: "handover_pending", tone: "success", status: "Teacher approved",
-          headline: `${teacherName} approved ${journey.collectorName}`,
-          detail: journey.collectorIsViewer ? `Tap when ${childName} is with you.` : `${childName} is not collected yet. It is complete once ${childName} is handed over to ${journey.collectorName}.`,
-          facts: [collectorFact, { label: "Teacher check", value: "Approved" }],
-          primary: journey.collectorIsViewer ? act("confirm_handover", `I've collected ${childName}`) : null,
-          demoActions: demoList(!journey.collectorIsViewer ? demoBtn("demo_handover", `Demo: ${childName} is handed over`) : null),
-          steps: helper ? helperSteps(5) : null, showCollector: helper,
-        };
-      }
-      if (teacherWaiting) {
-        return {
-          ...base, ...rows, phase: "teacher_pending", tone: "info", status: "Teacher is checking",
-          headline: `${teacherName} is checking ${journey.collectorName}`,
-          detail: `${demoTag}Photo sent. ${childName} leaves only after the teacher approves ${journey.collectorName}.`,
-          facts: [collectorFact, { label: "Teacher check", value: "Pending" }],
-          demoActions: demoList(demoBtn("demo_teacher_ok", "Demo: teacher says OK"), demoBtn("demo_teacher_no", "Demo: teacher says no")),
-          steps: helper ? helperSteps(4) : null, showCollector: helper,
-        };
-      }
+      const photoFact: Fact = { label: "Photo for the teacher", value: photoSent ? "Sent" : "Not sent yet" };
+      const viewerCollects = journey.collectorIsViewer;
       return {
-        ...base, ...rows, phase: "at_school", tone: "info", status: helper ? "Teacher is checking" : "At school",
-        headline: helper ? `${teacherName} checks ${journey.collectorName}` : `${who} at school for ${childName}`,
-        detail: journey.collectorIsViewer ? `Tap when ${childName} is with you.` : `${demoTag}${journey.collectorName} is at the school gate. ${teacherName} checks the photo before ${childName} leaves.`,
-        facts: [ends, collectorFact],
-        primary: journey.collectorIsViewer ? act("confirm_handover", `I've collected ${childName}`) : sendPhoto(),
-        secondary: journey.collectorIsViewer ? act("cancel_journey", "Cancel journey") : null,
-        more: journey.collectorIsViewer || simulated ? [] : [act("cancel_journey", "Cancel journey")],
-        demoActions: demoList(!journey.collectorIsViewer ? demoBtn("demo_teacher_ok", "Demo: teacher says OK") : null, !journey.collectorIsViewer ? demoBtn("demo_teacher_no", "Demo: teacher says no") : null),
-        steps: helper ? helperSteps(4) : null, showCollector: helper,
+        ...base, ...rows, phase: "at_school", tone: "info", status: "At school",
+        headline: `${who} at school for ${childName}`,
+        detail: viewerCollects
+          ? `Show ${teacherName} your photo. Tap when ${childName} is with you.`
+          : photoSent
+            ? `${demoTag}Photo sent. ${teacherName} compares it with ${journey.collectorName}. If it does not match, ${childName} stays and ${teacherName} messages you directly.`
+            : `${demoTag}${teacherName} compares the photo with ${journey.collectorName} at the gate. Send the photo so the teacher can check. If it does not match, ${childName} stays and ${teacherName} messages you directly.`,
+        facts: viewerCollects ? [ends, collectorFact] : [ends, collectorFact, photoFact],
+        primary: viewerCollects ? act("confirm_handover", `I've picked up ${childName}`) : photoSent ? null : sendPhoto(),
+        secondary: viewerCollects ? act("cancel_journey", "Cancel journey") : null,
+        more: viewerCollects || simulated ? [] : [act("cancel_journey", "Cancel journey")],
+        demoActions: demoList(!viewerCollects ? demoBtn("demo_handover", `Demo: ${journey.collectorName} says ${childName} is picked up`) : null),
+        steps: helper ? helperSteps(3) : null, showCollector: helper,
       };
     }
 
@@ -414,7 +374,6 @@ export function derivePickupFlow(input: FlowInput): PickupFlow {
 
     if (accepted) {
       const helper = accepted.name;
-      const teacherFact: Fact = { label: "Teacher check", value: "Not started" };
       const demoStart = simulated ? [act("demo_depart", `Demo: ${helper} starts travelling`)] : [];
       return {
         ...base, phase: "helper_assigned", tone: "success", status: circle.simulated ? "Demo helper" : "Helper assigned",
@@ -423,12 +382,12 @@ export function derivePickupFlow(input: FlowInput): PickupFlow {
         detail: circle.simulated
           ? `Demo only. ${helper} "accepted" in this demo. Nobody was contacted. You do not need to collect ${childName}. ${childName} is not collected yet.`
           : `${helper} accepted. You do not need to collect ${childName} today. Everyone else was told it is covered. ${childName} is not collected yet.`,
-        facts: [{ label: "Collector", value: helper }, teacherFact],
+        facts: [{ label: "Collector", value: helper }],
         more: simulated ? [] : [act("cancel_round", "Cancel and start over")],
         demoActions: demoStart,
         steps: helperSteps(2),
         showCollector: true,
-        note: `${teacherName} checks ${helper} when they reach the school.`,
+        note: `${teacherName} compares the photo with ${helper} when they reach the school.`,
       };
     }
 

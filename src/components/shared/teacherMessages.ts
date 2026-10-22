@@ -16,14 +16,14 @@ export function teacherMessage(lang: MsgLang, a: Common & { dismiss: number; lea
   return `Salam ${a.teacher}, saya ibu/bapa ${a.child} (${a.className}). Saya tidak dapat sampai pada waktu pulang (${d}). Saya akan bertolak pada ${l}${r ? ` dan dijangka sampai sekitar ${r}` : ""}. Mohon ${a.child} menunggu di pejabat sekolah. Terima kasih.`;
 }
 
-/** "X will pick up the child around 12:57. Here is their photo so you can check." */
+/** "X will pick up the child around 12:57. Here is their photo so you can check. If it is not them, please message me." */
 export function photoMessage(lang: MsgLang, a: Common & { collector: string; collectorRole: string; dismiss: number }): string {
   const at = clock(a.dismiss - 3);
   const role = a.collectorRole ? ` (${lang === "en" ? a.collectorRole : roleMs(a.collectorRole)})` : "";
   if (lang === "en") {
-    return `Hello ${a.teacher}, ${a.collector}${role} will pick up ${a.child} (Class ${a.className}) around ${at}. Here is their photo so you can check before ${a.child} goes. Thank you.`;
+    return `Hello ${a.teacher}, ${a.collector}${role} will pick up ${a.child} (Class ${a.className}) around ${at}. Here is their photo so you can check before ${a.child} goes. If it is not the same person, please do not let ${a.child} go and message me directly. Thank you.`;
   }
-  return `Salam ${a.teacher}, ${a.collector}${role} akan mengambil ${a.child} (${a.className}) sekitar ${at}. Berikut gambar beliau untuk semakan cikgu sebelum ${a.child} pulang. Terima kasih.`;
+  return `Salam ${a.teacher}, ${a.collector}${role} akan mengambil ${a.child} (${a.className}) sekitar ${at}. Berikut gambar beliau untuk semakan cikgu sebelum ${a.child} pulang. Jika bukan orang yang sama, mohon jangan lepaskan ${a.child} dan maklumkan saya terus. Terima kasih.`;
 }
 
 const MS_ROLES: Record<string, string> = { Parent: "ibu/bapa", Brother: "abang", Sister: "kakak", Uncle: "bapa saudara", Aunt: "ibu saudara", Neighbour: "jiran", Grandparent: "datuk/nenek" };

@@ -126,7 +126,7 @@ export function simInputs(s: SimState, env: SimEnv): {
 
   let journey: FlowJourney | null = null;
   if (e.stage === "travelling") journey = { state: "started", collectorName: collectorName ?? "A helper", collectorIsViewer: false, etaMinutes: Math.max(0, Math.ceil((1 - s.travel) * COLLECTOR_TRAVEL_MIN)) };
-  else if (e.stage === "arrived" || e.stage === "approved" || e.stage === "rejected") journey = { state: "at_school", collectorName: collectorName ?? "A helper", collectorIsViewer: false };
+  else if (e.stage === "arrived") journey = { state: "at_school", collectorName: collectorName ?? "A helper", collectorIsViewer: false };
   else if (e.stage === "collected") journey = { state: "collected", collectorName: collectorName ?? "A helper", collectorIsViewer: e.collector === env.viewerId, endedAt: nowMs };
   else if (s.parentJourney) journey = { state: s.parentJourney, collectorName: env.viewerName, collectorIsViewer: true, endedAt: s.parentJourney === "collected" ? nowMs : null };
 
@@ -238,8 +238,6 @@ export const sim = {
       }
       case "demo_depart": return sim.depart(env);
       case "demo_arrive": return sim.helperArrives(env);
-      case "demo_teacher_ok": return sim.teacherSays(true, env);
-      case "demo_teacher_no": return sim.teacherSays(false, env);
       case "demo_handover": return sim.handover(env);
       case "start_journey": set({ parentJourney: "started", place: "road", engine: prev.stage === "committed" ? { ...prev, stage: "plan", reason: "", leaveAt: null } : prev }); return true;
       case "arrived_school": set({ parentJourney: "at_school", place: "school" }); return true;
@@ -282,17 +280,7 @@ export const sim = {
     setTeacherCheck(collectorName, "awaitingTeacher");
     set({ engine: E.sendPhoto(state.engine) });
   },
-  /** Demo button: the teacher answers. OK approves the collector only. No means nothing is collected. */
-  teacherSays(ok: boolean, env: SimEnv): boolean {
-    const prev = state.engine;
-    const collector = prev.collector ? env.people.find((p) => p.id === prev.collector)?.name : null;
-    const next = ok ? E.teacherOk(prev) : E.teacherNo(prev);
-    if (next === prev) return false;
-    if (collector) setTeacherCheck(collector, ok ? "approved" : "rejected");
-    set({ engine: next });
-    return true;
-  },
-  /** Demo button: the child is handed over after the teacher approved. This completes the pickup. */
+  /** Demo button: the collector says the child is picked up. This completes the pickup. */
   handover(env: SimEnv): boolean {
     const prev = state.engine;
     const next = E.handover(prev);

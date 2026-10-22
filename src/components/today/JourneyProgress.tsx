@@ -5,7 +5,7 @@ import type { FlowStep } from "../shared/pickupFlow";
 import { T, useColors, useTone } from "../shared/ui";
 
 /**
- * Progress of a backup collector's pickup: Asked, Accepted, Travelling, At school, Teacher check, Collected.
+ * Progress of a backup collector's pickup: Asked, Accepted, Travelling, At school, Picked up.
  * One bar and one line of text, so it stays readable on a narrow phone. The current step is named in words.
  */
 export function StepBar({ steps }: { steps: FlowStep[] }) {
@@ -17,7 +17,7 @@ export function StepBar({ steps }: { steps: FlowStep[] }) {
   const allDone = steps.every((s) => s.state === "done");
   const base = tone === "warn" ? "rgba(94,75,0,.18)" : "rgba(255,255,255,.2)";
   const on = tone === "warn" ? "rgba(94,75,0,.85)" : "#FFFFFF";
-  const text = allDone ? "Collected. All steps done" : failed ? `Stopped at: ${failed.label}` : `Step ${index} of ${steps.length}: ${current.label}`;
+  const text = allDone ? "Picked up. All steps done" : failed ? `Stopped at: ${failed.label}` : `Step ${index} of ${steps.length}: ${current.label}`;
   return (
     <View
       accessible

@@ -16,8 +16,8 @@ type Note = { id: number; kind: "ok" | "info" | "bad"; title: string; sub: strin
 const SHOW_MS = 7000;
 
 /** Watches the pickup phase and raises one banner when something the parent cares about happens. */
-export function usePickupBanner(args: { phase: PickupPhase; collector: string; childName: string; teacher: string; simulated: boolean; whenLabel: string }) {
-  const { phase, collector, childName, teacher, simulated, whenLabel } = args;
+export function usePickupBanner(args: { phase: PickupPhase; collector: string; childName: string; simulated: boolean; whenLabel: string }) {
+  const { phase, collector, childName, simulated, whenLabel } = args;
   const [note, setNote] = useState<Note | null>(null);
   const prev = useRef<PickupPhase | null>(null);
   const id = useRef(0);
@@ -30,16 +30,12 @@ export function usePickupBanner(args: { phase: PickupPhase; collector: string; c
     let next: Omit<Note, "id"> | null = null;
     if (phase === "collected" && before !== "will_collect") {
       next = { kind: "ok", title: `${childName} has been picked up by ${collector}.`, sub: `${whenLabel}. ${tail}` };
-    } else if (phase === "teacher_rejected") {
-      next = { kind: "bad", title: `${teacher} did not approve ${collector}.`, sub: `${childName} has not been handed over. ${tail}` };
-    } else if (phase === "handover_pending") {
-      next = { kind: "info", title: `${teacher} approved ${collector}.`, sub: `${childName} is not collected until the handover. ${tail}` };
     } else if (phase === "helper_assigned") {
       next = { kind: "info", title: `${collector} will collect ${childName}.`, sub: tail };
     }
     if (next) setNote({ id: ++id.current, ...next });
     else if (phase === "late" || phase === "on_time" || phase === "asking") setNote(null);
-  }, [phase, collector, childName, teacher, simulated, whenLabel]);
+  }, [phase, collector, childName, simulated, whenLabel]);
 
   useEffect(() => {
     if (!note) return;
