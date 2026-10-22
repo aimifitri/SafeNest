@@ -54,14 +54,17 @@ export interface PickupStatus {
   collectorId: PersonId;
   currentPlace: "school" | "road" | "office";
   etaMinutes: number;
-  simulated: true;
+  // false when the status comes from a real pickup journey instead of the demo.
+  simulated: boolean;
 }
 
 export interface BackupRequest {
+  id?: string;
   state: BackupRequestState;
   helperId?: PersonId;
   requestedAt?: string;
-  simulated: true;
+  // true = local demo only. false = stored in Supabase and answered by the real helper.
+  simulated: boolean;
 }
 
 export interface TeacherPhotoVerification {

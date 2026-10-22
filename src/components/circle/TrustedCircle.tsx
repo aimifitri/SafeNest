@@ -25,6 +25,10 @@ import type { DemoActor } from "./circleDemo";
 
 type LocalTrustedHelper = TrustedHelper & { age: number };
 
+// Circle manages who can help. The active backup pickup (request, answers, confirmation) lives on Today.
+// The demo panel below was hidden on purpose; its state and handlers are unchanged. Set to true to show it again.
+const SHOW_PICKUP_WORKFLOW = false;
+
 type TimePickerPurpose = "backup" | "availability";
 type LocalBackupPickupRequest = {
   pickupTime: string;
@@ -342,6 +346,8 @@ function CircleDemoScreen() {
         onPress={() => setIsAddModalVisible(true)}
       />
 
+      {SHOW_PICKUP_WORKFLOW ? (
+        <>
       <SectionHeading title="Backup pickup" />
       <Card style={{ gap: 10 }}>
         <T s={1.05} w={700}>{backupPickupRequest ? "Backup request" : "Need someone else to collect?"}</T>
@@ -385,6 +391,9 @@ function CircleDemoScreen() {
           <T s={0.85} c="muted" align="center">No approved helpers are currently available.</T>
         ) : null}
       </Card>
+
+        </>
+      ) : null}
 
       <SectionHeading title="Family" />
       <Card tight>
@@ -451,7 +460,7 @@ function CircleDemoScreen() {
       </Sheet>
 
       <Sheet
-        visible={timePickerPurpose !== null}
+        visible={SHOW_PICKUP_WORKFLOW ? timePickerPurpose !== null : timePickerPurpose === "availability"}
         onClose={() => setTimePickerPurpose(null)}
         title={timePickerPurpose === "backup" ? "Backup pickup time" : "Your pickup availability"}
         closeLabel="Close time picker"
@@ -471,7 +480,7 @@ function CircleDemoScreen() {
         <T s={0.85} c="muted" align="center">Demo only · No real notification is sent.</T>
       </Sheet>
 
-      <Sheet visible={approvalNoticeVisible} onClose={() => setApprovalNoticeVisible(false)} title="Pickup confirmed">
+      <Sheet visible={SHOW_PICKUP_WORKFLOW && approvalNoticeVisible} onClose={() => setApprovalNoticeVisible(false)} title="Pickup confirmed">
         <View style={{ alignItems: "center", gap: 14, paddingTop: 10, paddingBottom: 6 }}>
           <View style={{ width: 96, height: 96, borderRadius: 48, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center" }}>
             <Icon name="check" size={46} color={colors.onPrimary} stroke={1.8} />

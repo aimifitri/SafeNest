@@ -1,4 +1,5 @@
-import { useLayoutEffect, useState } from "react";
+import { Link } from "expo-router";
+import { useEffect, useState } from "react";
 import { View } from "react-native";
 
 import { Icon } from "../navigation/Icon";
@@ -6,37 +7,37 @@ import { AppShell } from "../shared/AppShell";
 import { useAppContext } from "../shared/AppContext";
 import { Avatar } from "../shared/Avatar";
 import { Card } from "../shared/Card";
-import { PrimaryButton } from "../shared/PrimaryButton";
-import { SecondaryButton } from "../shared/SecondaryButton";
 import { SectionHeading } from "../shared/SectionHeading";
 import { Disclosure } from "../shared/Disclosure";
 import { Sheet } from "../shared/Sheet";
 import { TimeWheelPicker } from "../shared/TimeWheel";
 import { StatusPill } from "../shared/StatusPill";
+import { clock } from "../shared/circleEngine";
+import { sim } from "../shared/demoSim";
 import { mockData } from "../shared/mockData";
-import { Banner, Btn, Dl, Lead, Press, Rise, Row, T, Tag } from "../shared/ui";
-import type { BackupRequestState, VerificationState, Weekday } from "../shared/types";
+import { Banner, Btn, Dl, Err, Lead, Press, Rise, Row, Switch, T, Tag } from "../shared/ui";
+import { CircleRows } from "../today/CircleRows";
+import { usePickupFlow } from "../today/usePickupFlow";
+import type { Weekday } from "../shared/types";
 
 const weekdays: { key: Weekday; label: string }[] = [
   { key: 1, label: "Monday" }, { key: 2, label: "Tuesday" }, { key: 3, label: "Wednesday" }, { key: 4, label: "Thursday" }, { key: 5, label: "Friday" },
 ];
 
+// Plan is for planning: school times, today's change and the planned arrangement. The live pickup (who answered, the
+// collector's journey, the photo for the teacher, cancel and reset) lives on Today and shares the same state. The panels
+// below were moved out of Plan's visible interface on purpose. Their state, handlers and APIs are unchanged: set this
+// to true to bring them back.
+const SHOW_ACTIVE_PICKUP_PANELS = false;
+
 const validTime = /^(?:1[0-2]|[1-9]):[0-5][0-9] (?:AM|PM)$/;
 
-type VerificationRecord = { collectorId: string | null; state: VerificationState };
-
-// Demo memory survives Plan remounts, but not app restarts. Collector changes
-// away and back while Plan is unmounted cannot be detected here.
-let savedVerification: VerificationRecord | null = null;
-
 export function PickupPlan() {
-  const {
-    theme, trustedHelpers, temporaryDismissal, setTemporaryDismissal,
-    backupRequest, requestBackupPickup, respondToBackupPickup, resetBackupRequest,
-    weeklySchedule, updateWeekdayTime,
-  } = useAppContext();
+  const { theme, temporaryDismissal, setTemporaryDismissal, weeklySchedule, updateWeekdayTime } = useAppContext();
+  // One shared answer for Today and Plan: who is collecting and who was asked.
+  const pf = usePickupFlow();
   const colors = theme.colors;
-  const { child, school, pickupStatus, teacherPhotoVerification } = mockData;
+  const { child, school } = mockData;
   const weekdayNumber = new Date().getDay();
   const today: Weekday = (weekdayNumber === 0 ? 1 : Math.min(weekdayNumber, 5)) as Weekday;
   const todayLabel = weekdays.find((day) => day.key === today)?.label ?? "Today";
@@ -50,48 +51,15 @@ export function PickupPlan() {
   const [draftWeeklyTime, setDraftWeeklyTime] = useState("");
   const editingDayLabel = weekdays.find((day) => day.key === editingWeekday)?.label;
   const pickerTime = editingWeekday !== null ? draftWeeklyTime : selectedDismissal;
-  const availableHelpers = trustedHelpers.filter(
-    (helper) => helper.state === "active"
-  );
-  const [draftHelperId, setDraftHelperId] = useState<string | null>(availableHelpers[0]?.id ?? null);
   const [notice, setNotice] = useState("");
-  const backupState = backupRequest.state;
-  const hasBackupRequest = backupState !== "idle";
-  const isBackupResolved = backupState === "accepted" || backupState === "declined";
-  const draftHelper = availableHelpers.find((helper) => helper.id === draftHelperId) ?? availableHelpers[0];
-  // Existing requests always belong to the context helper, never the local draft.
-  const selectedBackupHelperId = hasBackupRequest ? backupRequest.helperId : draftHelper?.id;
-  const backupHelper = hasBackupRequest
-    ? trustedHelpers.find((helper) => helper.id === backupRequest.helperId)
-    : undefined;
-  const requestHelper = hasBackupRequest
-    ? availableHelpers.find((helper) => helper.id === backupRequest.helperId)
-    : draftHelper;
-  const scheduledCollector = [...mockData.familyMembers, ...trustedHelpers].find((person) => person.id === pickupStatus.collectorId);
-  const collector = backupState === "accepted" ? backupHelper ?? scheduledCollector : scheduledCollector;
-  const collectorId = collector?.id ?? null;
-  const [verification, setVerification] = useState<VerificationRecord>(() =>
-    savedVerification?.collectorId === collectorId
-      ? savedVerification
-      : { collectorId, state: "notStarted" },
-  );
-  // Never display the previous collector's decision, even before the reset commits.
-  const verificationState = verification.collectorId === collectorId ? verification.state : "notStarted";
-
-  useLayoutEffect(() => {
-    if (savedVerification?.collectorId !== collectorId) {
-      savedVerification = { collectorId, state: "notStarted" };
-    }
-    setVerification(savedVerification);
-  }, [collectorId]);
-
-  const setVerificationState = (state: VerificationState) => {
-    // A missing collector cannot receive a teacher decision.
-    if (collectorId === null) return;
-    const next: VerificationRecord = { collectorId, state };
-    savedVerification = next;
-    setVerification(next);
-  };
+  const [optInSheet, setOptInSheet] = useState(false);
+  const flow = pf.flow;
+  const collector = pf.collector;
+  const esc = pf.escalation;
+  const deadlineLabel = clock(pf.dismissMin - esc.minutesBefore);
+  const askedNames = pf.people.filter((p) => p.approved && p.id !== pf.viewerId).map((p) => p.name);
+  const flowIsActive = ["asking", "nobody", "helper_assigned", "travelling", "at_school", "collected"].includes(flow.phase);
+  const canAsk = flow.phase !== "helper_assigned" && flow.phase !== "asking" && flow.phase !== "travelling" && flow.phase !== "at_school" && flow.phase !== "collected";
 
   const openDismissalSelector = () => {
     setSelectedDismissal(dismissal);
@@ -128,37 +96,33 @@ export function PickupPlan() {
     setNotice(`Today is back to the regular time, ${originalDismissal}.`);
   };
 
-  const requestBackup = () => {
-    if (!requestHelper) return;
-    requestBackupPickup(requestHelper.id);
-    setNotice(`Demo request sent to ${requestHelper.name}.`);
+  const askCircle = async () => {
+    if (pf.busy) return;
+    const ok = await pf.run(flow.phase === "nobody" ? "ask_again" : "find_backup");
+    if (ok) setNotice(pf.simActive ? "Demo request started. Nobody was contacted." : "Request sent to your family and Trusted Circle.");
   };
 
-  const selectBackupHelper = (helperId: string) => {
-    if (isBackupResolved) return;
-    setDraftHelperId(helperId);
-    if (backupState === "requested") {
-      const helper = availableHelpers.find((item) => item.id === helperId);
-      requestBackupPickup(helperId);
-      setNotice(helper ? `Demo request updated to ${helper.name}.` : "Demo backup request updated.");
+  const cancelRound = async () => {
+    const ok = await pf.run("cancel_round");
+    if (ok) setNotice("Requests cancelled.");
+  };
+
+  const saveAutomatic = async (next: { enabled?: boolean; minutesBefore?: number }) => {
+    const merged = { ...esc, ...next };
+    if (pf.simActive) {
+      sim.setEscalation(merged, pf.env);
+      setNotice(merged.enabled ? `Automatic backup on. SafeNest asks at ${clock(pf.dismissMin - merged.minutesBefore)} (demo).` : "Automatic backup off.");
+      return;
     }
-  };
-
-  const respondToBackup = (accepted: boolean) => {
-    respondToBackupPickup(accepted ? "accepted" : "declined");
-    setNotice(accepted ? `${backupHelper?.name ?? "Helper"} accepted in this demo.` : `${backupHelper?.name ?? "Helper"} cannot help in this demo.`);
-  };
-
-  const prepareVerification = () => {
-    setVerificationState("awaitingTeacher");
-    setNotice("Demo pickup photo prepared for the teacher check.");
+    const ok = await pf.escalationSettings.saveSettings(merged);
+    if (ok) setNotice(merged.enabled ? "Automatic backup is on." : "Automatic backup is off.");
   };
 
   const weeklyMode = editingWeekday !== null;
 
   return (
     <AppShell title="Pickup Plan" badge="Plan" activeTab="plan">
-      <Lead>School times, backup help and the teacher check for {child.name}.</Lead>
+      <Lead>School times, today's change and who collects for {child.name}.</Lead>
       {notice ? <Banner key={notice} kind="ok">{notice}</Banner> : null}
 
       <SectionHeading title="Today" />
@@ -213,100 +177,104 @@ export function PickupPlan() {
       </Card>
       <T s={0.82} lh={1.4} c="muted" style={{ marginTop: -6 }}>Edit changes this day every week.</T>
 
-      <SectionHeading title="Backup collector" />
+      <SectionHeading title="Today's arrangement" />
+      <Card style={{ gap: 12 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+          <Avatar name={collector.name} size={44} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <T s={0.82} c="muted">Collector</T>
+            <T s={1.05} w={800} lh={1.25}>{arrangementTitle(flow.phase, collector.name, child.name)}</T>
+          </View>
+        </View>
+        <T c="muted" lh={1.4}>{arrangementDetail(flow.phase, collector.name, child.name, pf.dismissal, askedNames.length)}</T>
+        {flowIsActive ? (
+          <Link href="/" asChild>
+            <Press label="See the live pickup on Today" role="link" style={{ minHeight: 44, justifyContent: "center" }}>
+              <T w={700} c={colors.primaryInk} style={{ textDecorationLine: "underline" }}>See the live pickup on Today</T>
+            </Press>
+          </Link>
+        ) : null}
+        <T s={0.8} lh={1.4} c="muted">{pf.simActive ? "Simulated. " : ""}Requests, answers and the journey are shown on Today. Who can be asked is managed in Circle.</T>
+      </Card>
+
+      {SHOW_ACTIVE_PICKUP_PANELS ? (
+        <>
+      <SectionHeading title="Backup help" />
       <Card style={{ gap: 12 }}>
         <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 12 }}>
           <View style={{ flex: 1, minWidth: 0 }}>
-            <T s={1.05} w={700}>{backupState === "idle" ? "Can't collect today?" : "Backup request"}</T>
-            <T c="muted" lh={1.4}>{backupState === "idle" ? "Pick a helper and ask them." : backupState === "requested" ? "Waiting for the helper to answer." : backupState === "accepted" ? "The helper will collect." : "The helper cannot collect."}</T>
+            <T s={1.05} w={700}>{flow.phase === "helper_assigned" ? `${collector.name} is collecting` : flow.phase === "asking" ? "Asking your circle" : flow.phase === "nobody" ? "Nobody available" : "Can't collect today?"}</T>
+            <T c="muted" lh={1.4}>
+              {flow.recipients.length > 0 || !canAsk
+                ? flow.detail
+                : "SafeNest asks your whole family and Trusted Circle at once. The first person to accept becomes the collector."}
+            </T>
           </View>
-          <Rise key={backupState} kind="swap">
-            <StatusPill label={backupStateLabel(backupState)} tone={backupState === "accepted" ? "success" : backupState === "declined" ? "danger" : backupState === "requested" ? "warning" : "neutral"} />
+          <Rise key={flow.phase} kind="swap">
+            <StatusPill label={flow.status} tone={flow.tone} />
           </Rise>
         </View>
-        {availableHelpers.length === 0 && !hasBackupRequest ? (
-          <View>
-            <T w={700}>No approved helpers yet</T>
-            <T c="muted" lh={1.4}>Invite and approve a helper in Circle first.</T>
-          </View>
-        ) : null}
-        {availableHelpers.length > 0 ? (
-          <View style={{ gap: 8 }}>
-            {availableHelpers.map((helper) => {
-              const picked = selectedBackupHelperId === helper.id;
-              return (
-                <Press
-                  key={helper.id}
-                  role="radio"
-                  label={`${helper.name}, ${helper.role}`}
-                  state={{ checked: picked, disabled: isBackupResolved }}
-                  disabled={isBackupResolved}
-                  onPress={() => selectBackupHelper(helper.id)}
-                  style={{
-                    minHeight: 56, flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 14, borderWidth: 1.5,
-                    borderColor: picked ? colors.primary : colors.line, backgroundColor: picked ? colors.primarySoft : colors.background,
-                    opacity: isBackupResolved && !picked ? 0.6 : 1,
-                    transitionProperty: ["backgroundColor", "borderColor"], transitionDuration: 200,
-                  } as object}
-                >
-                  <Avatar name={helper.name} size={36} />
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <T s={0.95} w={700} c={picked ? colors.primaryInk : "ink"}>{helper.name}</T>
-                    <T s={0.82} c="muted" lh={1.3}>{helper.role}</T>
+        {flow.recipients.length > 0 ? <CircleRows rows={flow.recipients} /> : null}
+        {flow.recipients.length === 0 && canAsk ? (
+          <Disclosure title="Who will be asked" sub={askedNames.length ? `${askedNames.length} people` : "Nobody yet"}>
+            {askedNames.length > 0 ? (
+              <View style={{ gap: 8 }}>
+                {askedNames.map((name) => (
+                  <View key={name} style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                    <Avatar name={name} size={32} />
+                    <T w={600}>{name}</T>
                   </View>
-                  {picked ? <Icon name="check" size={18} color={colors.primaryInk} stroke={2.6} /> : null}
-                </Press>
-              );
-            })}
-          </View>
+                ))}
+                <T s={0.82} c="muted" lh={1.4}>Approved family and Trusted Circle members who have joined SafeNest. Pending members and you are never asked.</T>
+              </View>
+            ) : (
+              <T c="muted" lh={1.4}>Invite and approve people in Circle first.</T>
+            )}
+          </Disclosure>
         ) : null}
-        {backupState === "idle" || backupState === "accepted" || backupState === "declined" ? (
-          <PrimaryButton label={backupState === "idle" ? "Request backup pickup" : "Ask again"} disabled={!requestHelper} onPress={requestBackup} />
-        ) : (
-          <View style={{ gap: 8 }}>
-            <T s={0.85} w={700} c="muted">Simulate the helper's answer:</T>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-              <Btn kind="p" flex onPress={() => respondToBackup(true)}>Helper accepts</Btn>
-              <Btn kind="o" flex color={colors.danger} onPress={() => respondToBackup(false)}>Helper declines</Btn>
-            </View>
-          </View>
-        )}
-        {backupState !== "idle" ? <SecondaryButton label="Clear request" onPress={resetBackupRequest} /> : null}
-        <T s={0.8} lh={1.4} c="muted">Simulated. No one is contacted.</T>
+        {canAsk ? (
+          <Btn kind="p" loading={pf.busy} disabled={pf.busy} onPress={() => void askCircle()}>{flow.phase === "nobody" ? "Ask everyone again" : "Ask my circle now"}</Btn>
+        ) : null}
+        {flow.phase === "asking" || flow.phase === "helper_assigned" ? (
+          <Btn kind="o" disabled={pf.busy} onPress={() => void cancelRound()}>{flow.phase === "asking" ? "Cancel requests" : "Cancel and start over"}</Btn>
+        ) : null}
+        {pf.error ? <Err text={pf.error} /> : null}
+        <T s={0.8} lh={1.4} c="muted">{pf.simActive ? "Simulated. Nobody is contacted. Use Demo controls on Today to answer for them." : pf.groupRequests === false ? "Your database can only ask one helper at a time. Group requests need the backend upgrade." : "Sent through SafeNest. Each person answers on their own phone."}</T>
       </Card>
 
-      <SectionHeading title="Teacher check" />
+        </>
+      ) : null}
+
+      <SectionHeading title="Automatic backup" />
       <Card style={{ gap: 12 }}>
-        <View style={{ gap: 10 }}>
-          <View>
-            <T s={1.05} w={700}>{school.teacher} confirms the collector</T>
-            <T c="muted" lh={1.4}>Before {child.name} leaves with {collector?.name ?? "the collector"}.</T>
-          </View>
-          <Rise key={verificationState} kind="swap">
-            <StatusPill label={verificationLabel(verificationState)} tone={verificationState === "approved" ? "success" : verificationState === "rejected" ? "danger" : "info"} />
-          </Rise>
-        </View>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 14, padding: 12, borderRadius: 18, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.line }}>
-          <Avatar name={collector?.name ?? "Collector"} size={48} />
+        <Press
+          role="switch"
+          label="Automatic backup"
+          state={{ checked: esc.enabled, disabled: !pf.simActive && pf.escalationSettings.settingsAvailable !== true }}
+          disabled={!pf.simActive && pf.escalationSettings.settingsAvailable !== true}
+          onPress={() => (esc.enabled ? void saveAutomatic({ enabled: false }) : setOptInSheet(true))}
+          style={{ flexDirection: "row", alignItems: "center", gap: 12, minHeight: 56 }}
+        >
           <View style={{ flex: 1, minWidth: 0 }}>
-            <T w={800}>{collector?.name ?? "Pickup collector"}</T>
-            <T s={0.84} c="muted" lh={1.35}>{teacherPhotoVerification.photoDescription}</T>
+            <T s={1.05} w={700}>Ask for me if I do not answer</T>
+            <T s={0.9} c="muted" lh={1.4}>{esc.enabled ? `On. If you may be late and have not answered by ${deadlineLabel}, SafeNest asks everyone together.` : `Off. SafeNest alerts you at ${deadlineLabel} but asks nobody unless you tap.`}</T>
           </View>
-        </View>
-        {verificationState === "notStarted" || verificationState === "rejected" ? (
-          <PrimaryButton label="Prepare demo photo check" onPress={prepareVerification} />
-        ) : verificationState === "awaitingTeacher" || verificationState === "photoPrepared" ? (
-          <View style={{ gap: 8 }}>
-            <T s={0.85} w={700} c="muted">Simulate the teacher's answer:</T>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-              <Btn kind="p" flex onPress={() => { setVerificationState("approved"); setNotice("Teacher approval simulated. This is not an identity check."); }}>Simulate teacher OK</Btn>
-              <Btn kind="o" flex color={colors.danger} onPress={() => { setVerificationState("rejected"); setNotice("Teacher rejection simulated. This is not an identity check."); }}>Simulate no</Btn>
+          <Switch on={esc.enabled} />
+        </Press>
+        {!pf.simActive && pf.escalationSettings.settingsAvailable !== true ? (
+          <T s={0.85} c="muted" lh={1.4}>Not available yet. It needs the backend upgrade (pickup_broadcast.sql) to be approved and applied first.</T>
+        ) : null}
+        {esc.enabled ? (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <T s={0.82} c="muted">Ask this long before school ends</T>
+              <T w={800} tab>{esc.minutesBefore} min (at {deadlineLabel})</T>
             </View>
+            <Btn kind="o" sm label="Ask later" onPress={() => void saveAutomatic({ minutesBefore: Math.max(0, esc.minutesBefore - 1) })}>-1</Btn>
+            <Btn kind="o" sm label="Ask earlier" onPress={() => void saveAutomatic({ minutesBefore: Math.min(60, esc.minutesBefore + 1) })}>+1</Btn>
           </View>
-        ) : (
-          <SecondaryButton label="Reset demo verification" onPress={() => { setVerificationState("notStarted"); setNotice("Demo teacher check reset."); }} />
-        )}
-        <T s={0.8} lh={1.4} c="muted">Simulated. No photo is taken and no identity is verified.</T>
+        ) : null}
+        <T s={0.8} lh={1.4} c="muted">Only starts when SafeNest predicts you will be late and you have not answered. You can turn it off any time.</T>
       </Card>
 
       <Disclosure title="Child and school details" sub={`${child.name}, ${child.age} · Class ${child.className}`}>
@@ -325,12 +293,36 @@ export function PickupPlan() {
       <Disclosure title="How pickup works" sub="Four short steps">
         <View style={{ gap: 14 }}>
           <Step number="1" title="Check today's plan" detail={`${collector?.name ?? "The collector"} collects at ${dismissal}.`} />
-          <Step number="2" title="Ask for backup if needed" detail="A trusted helper can be asked from here or from Today." />
-          <Step number="3" title="Teacher checks" detail={`${school.teacher} confirms the collector before ${child.name} leaves.`} />
-          <Step number="4" title="Child leaves" detail="After the teacher says OK. This is a demo." />
+          <Step number="2" title="Backup if you cannot make it" detail={`Say so, or SafeNest asks your family and Trusted Circle together at ${deadlineLabel} if you are late and have not answered.`} />
+          <Step number="3" title="Photo shown at school" detail={`${school.teacher} compares the photo with the person at the gate. If it does not match, ${child.name} stays and the teacher messages you directly.`} />
+          <Step number="4" title="Collector confirms" detail={`The collector taps that ${child.name} is picked up. This is a demo.`} />
         </View>
       </Disclosure>
 
+      <Sheet
+        visible={optInSheet}
+        onClose={() => setOptInSheet(false)}
+        title="Turn on automatic backup?"
+        closeLabel="Close automatic backup"
+        footer={
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+            <Btn kind="o" style={{ flexGrow: 1, flexBasis: 120 }} onPress={() => setOptInSheet(false)}>Not now</Btn>
+            <Btn kind="p" style={{ flexGrow: 1, flexBasis: 160 }} icon="check" onPress={() => { setOptInSheet(false); void saveAutomatic({ enabled: true }); }}>Turn on</Btn>
+          </View>
+        }
+      >
+        <T lh={1.45}>If SafeNest predicts you will arrive after school ends and you have not answered by {deadlineLabel} ({esc.minutesBefore} minutes before), it will send a request to collect {child.name} to:</T>
+        <View style={{ gap: 8 }}>
+          {askedNames.length > 0 ? askedNames.map((name) => (
+            <View key={name} style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+              <Avatar name={name} size={32} />
+              <T w={700}>{name}</T>
+            </View>
+          )) : <T c="muted">Nobody yet. Approve people in Circle first.</T>}
+        </View>
+        <T s={0.9} c="muted" lh={1.45}>They are asked together. The first to accept becomes the collector and the rest are told it is covered. They see {child.name}'s name and {school.name}. They do not see your location. You can turn this off or change the time here at any time.</T>
+        {!pf.simActive ? <T s={0.9} c="muted" lh={1.45}>If you close the app, a scheduled check on the server can still ask them, but only once your backend team has set that up.</T> : null}
+      </Sheet>
       <Sheet
         visible={isDismissalModalVisible || weeklyMode}
         onClose={closeTimeSelector}
@@ -378,18 +370,23 @@ function Step({ number, title, detail }: { number: string; title: string; detail
   );
 }
 
-function backupStateLabel(state: BackupRequestState): string {
-  if (state === "requested") return "Waiting";
-  if (state === "accepted") return "Accepted";
-  if (state === "declined") return "Declined";
-  return "Not requested";
+function arrangementTitle(phase: string, collector: string, child: string): string {
+  switch (phase) {
+    case "asking": return "Asking your circle";
+    case "nobody": return "Nobody available yet";
+    case "helper_assigned": case "travelling": case "at_school": return `${collector} is collecting`;
+    case "collected": return `${child} was collected by ${collector}`;
+    default: return `${collector} collects`;
+  }
 }
 
-function verificationLabel(state: VerificationState): string {
-  if (state === "approved") return "Teacher OK · Demo";
-  if (state === "rejected") return "Teacher said no · Demo";
-  if (state === "awaitingTeacher") return "Awaiting teacher · Demo";
-  if (state === "photoPrepared") return "Photo prepared · Demo";
-  return "Not started · Demo";
+function arrangementDetail(phase: string, collector: string, child: string, dismissal: string, asked: number): string {
+  switch (phase) {
+    case "asking": return `A backup request is open. The first person to accept collects ${child}.`;
+    case "nobody": return `Nobody could collect ${child} yet. Open Today to decide what happens next.`;
+    case "helper_assigned": return `${collector} accepted, so you do not need to collect ${child} today.`;
+    case "travelling": case "at_school": return `${collector} is handling today's pickup. ${child} is not collected until ${collector} confirms the pickup.`;
+    case "collected": return `Today's pickup is complete.`;
+    default: return `You plan to collect ${child} when school ends at ${dismissal}. If you cannot, SafeNest can ask ${asked} ${asked === 1 ? "person" : "people"} together.`;
+  }
 }
-

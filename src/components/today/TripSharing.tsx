@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { uniqueChannelName } from "../shared/realtimeChannel";
 import { View } from "react-native";
 
 import { supabase } from "../../lib/supabase";
@@ -78,7 +79,7 @@ export function TripSharing({ visible, tracking, point }: { visible: boolean; tr
     };
     void loadSharingData();
     const channel = supabase
-      .channel(`location-shares-${session.user.id}`)
+      .channel(uniqueChannelName(`location-shares-${session.user.id}`))
       .on("postgres_changes", {
         event: "*",
         schema: "public",
@@ -117,7 +118,7 @@ export function TripSharing({ visible, tracking, point }: { visible: boolean; tr
     if (!visible || !viewingShare) return;
     let current = true;
     const channel = supabase
-      .channel(`live-location-${viewingShare.id}`)
+      .channel(uniqueChannelName(`live-location-${viewingShare.id}`))
       .on("postgres_changes", {
         event: "*",
         schema: "public",

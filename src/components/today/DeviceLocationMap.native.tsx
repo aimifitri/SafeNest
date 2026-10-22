@@ -1,65 +1,135 @@
-import { useEffect, useRef, useState } from "react";
 import MapView, { Circle, Marker, Polyline } from "react-native-maps";
+import type { Region } from "react-native-maps";
+import { useEffect, useRef, useState } from "react";
+
 import { useAppContext } from "../shared/AppContext";
 import type { TravelMode } from "./NavigationSearch";
+export type { DeviceLocationPoint } from "./DeviceLocationMap.types";
+import type { DeviceLocationMapProps } from "./DeviceLocationMap.types";
 
-export type DeviceLocationPoint = {
-  latitude: number;
-  longitude: number;
-  accuracy: number | null;
-  title: string;
-  detail?: string;
-};
+function initialRegion({ point, destination }: DeviceLocationMapProps): Region {
+  const coordinates = [point, destination].filter((coordinate) => coordinate !== null && coordinate !== undefined);
+  if (coordinates.length === 2) {
+    const [first, second] = coordinates;
+    if (!first || !second) return { latitude: 0, longitude: 0, latitudeDelta: 30, longitudeDelta: 30 };
+    return {
+      latitude: (first.latitude + second.latitude) / 2,
+      longitude: (first.longitude + second.longitude) / 2,
+      latitudeDelta: Math.max(Math.abs(first.latitude - second.latitude) * 1.8, 0.012),
+      longitudeDelta: Math.max(Math.abs(first.longitude - second.longitude) * 1.8, 0.012),
+    };
+  }
+  const coordinate = coordinates[0];
+  return coordinate
+    ? { latitude: coordinate.latitude, longitude: coordinate.longitude, latitudeDelta: 0.012, longitudeDelta: 0.012 }
+    : { latitude: 0, longitude: 0, latitudeDelta: 30, longitudeDelta: 30 };
+}
 
-export type DeviceLocationMapProps = {
-  point: DeviceLocationPoint;
-  destination?: DeviceLocationPoint | null;
-  previewMode?: TravelMode;
-};
-
-export function DeviceLocationMap({ point, destination, previewMode }: DeviceLocationMapProps) {
+export function DeviceLocationMap({
+  point,
+  destination,
+  destinationTitle,
+  showPreview,
+  routeCoordinates,
+  travelledCoordinates,
+  navigationActive,
+  onSelectDestination,
+  previewMode,
+}: DeviceLocationMapProps & { previewMode?: TravelMode }) {
   const { theme } = useAppContext();
-  const map = useRef<MapView>(null);
-  const [ready, setReady] = useState(false);
+  const mapRef = useRef<MapView | null>(null);
+  const [mapReady, setMapReady] = useState(false);
+
   useEffect(() => {
-    if (!ready) return;
-    if (destination) {
-      map.current?.fitToCoordinates([point, destination], {
-        edgePadding: { top: 60, right: 60, bottom: 60, left: 60 },
-        animated: true,
+    if (!mapReady || !routeCoordinates || routeCoordinates.length < 2) return;
+    mapRef.current?.fitToCoordinates([...routeCoordinates], {
+      animated: true,
+      edgePadding: { top: 48, right: 48, bottom: 48, left: 48 },
+    });
+  }, [mapReady, routeCoordinates]);
+
+  useEffect(() => {
+    if (!mapReady || (routeCoordinates && routeCoordinates.length > 1)) return;
+    const coordinates = [point, destination].filter((coordinate) => coordinate !== null && coordinate !== undefined);
+    if (coordinates.length === 0) return;
+    if (coordinates.length === 1) {
+      const coordinate = coordinates[0];
+      if (coordinate) mapRef.current?.animateToRegion({
+        latitude: coordinate.latitude,
+        longitude: coordinate.longitude,
+        latitudeDelta: 0.012,
+        longitudeDelta: 0.012,
       });
-    } else {
-      map.current?.animateToRegion({ ...point, latitudeDelta: 0.012, longitudeDelta: 0.012 }, 500);
+      return;
     }
-  }, [ready, point.latitude, point.longitude, destination]);
-  const region = {
-    latitude: point.latitude,
-    longitude: point.longitude,
-    latitudeDelta: 0.012,
-    longitudeDelta: 0.012,
-  };
+    mapRef.current?.fitToCoordinates(coordinates, {
+      animated: true,
+      edgePadding: { top: 48, right: 48, bottom: 48, left: 48 },
+    });
+  }, [mapReady, routeCoordinates, point?.latitude, point?.longitude, destination?.latitude, destination?.longitude]);
+
+  useEffect(() => {
+    if (!mapReady || !navigationActive || !point) return;
+    mapRef.current?.animateToRegion({
+      latitude: point.latitude,
+      longitude: point.longitude,
+      latitudeDelta: 0.008,
+      longitudeDelta: 0.008,
+    }, 500);
+  }, [mapReady, navigationActive, point?.latitude, point?.longitude]);
 
   return (
-    <MapView ref={map} style={{ flex: 1 }} initialRegion={region} userInterfaceStyle={theme.isDark ? "dark" : "light"} onMapReady={() => setReady(true)} showsCompass showsScale>
-      {point.accuracy !== null ? <Circle
-        center={{ latitude: point.latitude, longitude: point.longitude }}
-        radius={Math.max(point.accuracy ?? 20, 10)}
-        fillColor="rgba(33, 137, 117, 0.16)"
-        strokeColor="rgba(33, 137, 117, 0.65)"
-        strokeWidth={1}
-      /> : null}
-      {destination && previewMode ? <Polyline
-        coordinates={[point, destination]}
-        strokeColor={previewMode === "walking" || previewMode === "biking" ? "#218975" : "#208AEF"}
-        strokeWidth={5}
-        lineDashPattern={previewMode === "walking" ? [4, 8] : [12, 8]}
-      /> : null}
-      <Marker
-        coordinate={{ latitude: point.latitude, longitude: point.longitude }}
-        title={point.title}
-        description={point.detail}
-      />
-      {destination ? <Marker coordinate={destination} title={destination.title} description="Destination" pinColor="#208AEF" /> : null}
+    <MapView
+      ref={mapRef}
+      style={{ flex: 1 }}
+      initialRegion={initialRegion({ point, destination })}
+      onMapReady={() => setMapReady(true)}
+      onPress={(event) => onSelectDestination?.(event.nativeEvent.coordinate)}
+      userInterfaceStyle={theme.isDark ? "dark" : "light"}
+      showsCompass
+      showsScale
+      accessibilityLabel="Map with current location and destination"
+    >
+      {point ? (
+        <>
+          {point.accuracy !== null ? (
+            <Circle
+              center={{ latitude: point.latitude, longitude: point.longitude }}
+              radius={Math.max(point.accuracy, 10)}
+              fillColor="rgba(33, 137, 117, 0.16)"
+              strokeColor="rgba(33, 137, 117, 0.65)"
+              strokeWidth={1}
+            />
+          ) : null}
+          <Marker
+            coordinate={{ latitude: point.latitude, longitude: point.longitude }}
+            title={point.title}
+            description={point.detail}
+          />
+        </>
+      ) : null}
+      {destination ? (
+        <Marker coordinate={destination} title={destinationTitle ?? "Destination"} description="Selected destination" pinColor="#B3261E" />
+      ) : null}
+      {routeCoordinates && routeCoordinates.length > 1 ? (
+        <Polyline
+          coordinates={[...routeCoordinates]}
+          strokeColor="rgba(15, 125, 134, 0.5)"
+          strokeWidth={5}
+        />
+      ) : null}
+      {travelledCoordinates && travelledCoordinates.length > 1 ? (
+        <Polyline coordinates={[...travelledCoordinates]} strokeColor="#0F7D86" strokeWidth={6} />
+      ) : null}
+      {(!routeCoordinates || routeCoordinates.length < 2) && point && destination && showPreview ? (
+        <Polyline
+          coordinates={[{ latitude: point.latitude, longitude: point.longitude }, destination]}
+          geodesic
+          lineDashPattern={previewMode === "walking" ? [4, 8] : [12, 8]}
+          strokeColor={previewMode === "walking" || previewMode === "biking" ? "#218975" : "#208AEF"}
+          strokeWidth={4}
+        />
+      ) : null}
     </MapView>
   );
 }
