@@ -21,7 +21,6 @@ import {
 } from "../shared/pickupJourneyApi";
 import type { MyJourney } from "../shared/pickupJourneyApi";
 import { JourneySteps } from "./JourneySteps";
-import { PickupLocationControls } from "./PickupLocation";
 
 // Shown on Today only when someone has asked THIS signed-in person to collect a child.
 // This is the helper's side of a real (non-simulated) backup request. Renders nothing otherwise.
@@ -117,7 +116,6 @@ export function HelperAssignments() {
                   onCancel={() => journey && void run(item, () => cancelJourney(journey.journey_id))}
                 />
               )}
-              {journey ? <PickupLocationControls journeyId={journey.journey_id} /> : null}
             </Card>
           </Rise>
         );
