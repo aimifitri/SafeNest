@@ -21,24 +21,35 @@ import {
 } from "../shared/pickupJourneyApi";
 import type { MyJourney } from "../shared/pickupJourneyApi";
 import { JourneySteps } from "./JourneySteps";
+import { useSoundEffects } from "../shared/SoundEffects";
 
 // Shown on Today only when someone has asked THIS signed-in person to collect a child.
 // This is the helper's side of a real (non-simulated) backup request. Renders nothing otherwise.
 export function HelperAssignments() {
   const { session } = useAuth();
+  const { playPickupChime, playNotificationAlert } = useSoundEffects();
   const userId = session?.user.id;
   const [items, setItems] = useState<BackupAssignment[]>([]);
   const [journeys, setJourneys] = useState<MyJourney[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const busyRef = useRef(false); // state is async, so a fast double tap needs a ref to be refused
+  const knownRequestIds = useRef<Set<string> | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const [res, mine] = await Promise.all([fetchAssignments(), fetchMyJourneys()]);
     // A failed background load just keeps what is shown. It is not an error for people who are not helpers.
-    if (res.ok) setItems(res.data);
+    if (res.ok) {
+      const nextIds = new Set(res.data.map((item) => item.request_id));
+      const previousIds = knownRequestIds.current;
+      if (previousIds && res.data.some((item) => item.state === "requested" && !previousIds.has(item.request_id))) {
+        playNotificationAlert();
+      }
+      knownRequestIds.current = nextIds;
+      setItems(res.data);
+    }
     if (mine.ok) setJourneys(mine.data);
-  }, []);
+  }, [playNotificationAlert]);
 
   useEffect(() => {
     if (!userId) return;
@@ -97,10 +108,10 @@ export function HelperAssignments() {
 
               {item.state === "requested" ? (
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-                  <Btn kind="p" flex loading={busy} disabled={busy} onPress={() => void run(item, () => respondToRequest(item.request_id, true))}>
+                  <Btn kind="p" flex loading={busy} disabled={busy} onPress={() => { playPickupChime(); void run(item, () => respondToRequest(item.request_id, true)); }}>
                     Yes, I can collect
                   </Btn>
-                  <Btn kind="o" flex disabled={busy} onPress={() => void run(item, () => respondToRequest(item.request_id, false))}>
+                  <Btn kind="o" flex disabled={busy} onPress={() => { playPickupChime(); void run(item, () => respondToRequest(item.request_id, false)); }}>
                     I cannot
                   </Btn>
                 </View>

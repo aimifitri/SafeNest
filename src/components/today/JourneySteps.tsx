@@ -2,6 +2,7 @@ import { useState } from "react";
 import { View } from "react-native";
 
 import { Btn, T } from "../shared/ui";
+import { useSoundEffects } from "../shared/SoundEffects";
 
 export type JourneyStep = "none" | "started" | "at_school";
 
@@ -28,10 +29,11 @@ export function JourneySteps({
   onCancel: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const { playPickupChime } = useSoundEffects();
 
   if (step === "none") {
     return (
-      <Btn kind="p" loading={busy} disabled={busy} onPress={onStart}>
+      <Btn kind="p" loading={busy} disabled={busy} onPress={() => { playPickupChime(); onStart(); }}>
         {startLabel}
       </Btn>
     );
@@ -40,7 +42,7 @@ export function JourneySteps({
   if (step === "started") {
     return (
       <View style={{ gap: 10 }}>
-        <Btn kind="p" loading={busy} disabled={busy} onPress={onArrived}>
+        <Btn kind="p" loading={busy} disabled={busy} onPress={() => { playPickupChime(); onArrived(); }}>
           I've arrived at school
         </Btn>
         <Btn kind="o" disabled={busy} onPress={onCancel}>
@@ -69,7 +71,7 @@ export function JourneySteps({
         This records that {childName} is with you and ends the journey. The school does not verify it.
       </T>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-        <Btn kind="p" flex loading={busy} disabled={busy} onPress={onHandover}>
+        <Btn kind="p" flex loading={busy} disabled={busy} onPress={() => { playPickupChime(); onHandover(); }}>
           Yes, confirm
         </Btn>
         <Btn kind="o" flex disabled={busy} onPress={() => setConfirming(false)}>

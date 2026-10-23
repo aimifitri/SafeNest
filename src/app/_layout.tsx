@@ -15,20 +15,23 @@ import { OnboardingFlow } from "../components/onboarding/OnboardingFlow";
 import { OnboardingProvider, useOnboarding } from "../components/onboarding/OnboardingContext";
 import { Btn } from "../components/shared/ui";
 import { T } from "../components/shared/ui";
+import { SoundEffectsProvider } from "../components/shared/SoundEffects";
 
 export default function RootLayout() {
   return (
-    <SafeAreaProvider>
-      <AuthProvider>
-        <HouseholdProvider>
-          <AppProvider>
-            <OnboardingProvider>
-              <RootNavigator />
-            </OnboardingProvider>
-          </AppProvider>
-        </HouseholdProvider>
-      </AuthProvider>
-    </SafeAreaProvider>
+    <SoundEffectsProvider>
+      <SafeAreaProvider>
+        <AuthProvider>
+          <HouseholdProvider>
+            <AppProvider>
+              <OnboardingProvider>
+                <RootNavigator />
+              </OnboardingProvider>
+            </AppProvider>
+          </HouseholdProvider>
+        </AuthProvider>
+      </SafeAreaProvider>
+    </SoundEffectsProvider>
   );
 }
 

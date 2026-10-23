@@ -11,6 +11,7 @@ import { CircleRows } from "./CircleRows";
 import { CollectorCard, StepBar } from "./JourneyProgress";
 import { LeaveSheet, TeacherLateSheet, TeacherPhotoSheet } from "./TeacherSheets";
 import type { usePickupFlow } from "./usePickupFlow";
+import { useSoundEffects } from "../shared/SoundEffects";
 
 type Flow = ReturnType<typeof usePickupFlow>;
 type OpenSheet = null | "photo" | "late" | "leave";
@@ -20,6 +21,7 @@ type OpenSheet = null | "photo" | "late" | "leave";
 // Nothing here decides anything. Pressing "Find trusted backup" asks EVERYONE eligible at once.
 export function PickupStatusCard({ pf, childName }: { pf: Flow; childName: string }) {
   const { flow } = pf;
+  const { playPickupChime } = useSoundEffects();
   const [sheet, setSheet] = useState<OpenSheet>(null);
   const [more, setMore] = useState(false);
   const [why, setWhy] = useState(false);
@@ -47,6 +49,7 @@ export function PickupStatusCard({ pf, childName }: { pf: Flow; childName: strin
       return;
     }
     if (id === "confirm_handover" && !confirmHandover) { setConfirmHandover(true); return; }
+    if (id === "start_journey" || id === "find_backup" || id === "ask_again" || id === "confirm_handover") playPickupChime();
     setPending(id);
     setHint(null);
     try {

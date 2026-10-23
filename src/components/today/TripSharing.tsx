@@ -6,6 +6,7 @@ import { supabase } from "../../lib/supabase";
 import { Icon } from "../navigation/Icon";
 import { useAuth } from "../shared/AuthContext";
 import { Btn, Press, T } from "../shared/ui";
+import { useSoundEffects } from "../shared/SoundEffects";
 import { DeviceLocationMap } from "./DeviceLocationMap";
 
 interface LocationPoint {
@@ -35,6 +36,7 @@ type SharedLocation = {
 };
 
 export function TripSharing({ visible, tracking, point, hidden = false, showIncoming = false }: { visible: boolean; tracking: boolean; point: LocationPoint | null; hidden?: boolean; showIncoming?: boolean }) {
+  const { playPickupChime } = useSoundEffects();
   const { session, familyId } = useAuth();
   const [guardians, setGuardians] = useState<Guardian[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -241,10 +243,10 @@ export function TripSharing({ visible, tracking, point, hidden = false, showInco
       {activeShareId ? (
         <View style={{ gap: 8 }}>
           <T s={0.85} w={700} c="#176B5D">Live trip sharing is on for {selectedIds.length} guardian{selectedIds.length === 1 ? "" : "s"}.</T>
-          <Btn kind="o" icon="cantx" color="#A63F37" onPress={() => void stopSharing()} disabled={loading}>Stop sharing now</Btn>
+          <Btn kind="o" icon="cantx" color="#A63F37" onPress={() => { playPickupChime(); void stopSharing(); }} disabled={loading}>Stop sharing now</Btn>
         </View>
       ) : (
-        <Btn kind="p" icon="userplus" onPress={() => void startSharing()} disabled={!tracking || selectedIds.length === 0 || loading}>
+        <Btn kind="p" icon="userplus" onPress={() => { playPickupChime(); void startSharing(); }} disabled={!tracking || selectedIds.length === 0 || loading}>
           {loading ? "Preparing sharing..." : "Start sharing this trip"}
         </Btn>
       )}

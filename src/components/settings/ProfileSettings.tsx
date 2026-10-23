@@ -37,6 +37,7 @@ import { HouseholdPage } from "./HouseholdPage";
 import { MyProfilePage } from "./MyProfilePage";
 import { SchoolPreferences } from "./SchoolPreferences";
 import { SecurityPage } from "./SecurityPage";
+import { useSoundEffects } from "../shared/SoundEffects";
 
 // Settings: a profile card and grouped rows on the home page, each row opening a sub-page (Back returns home).
 // Account pages read and write the signed-in person's real data. Appearance and notification choices are
@@ -105,6 +106,7 @@ const accordionOptions: { key: AccordionKey; title: string; icon: string }[] = [
 ];
 
 export function ProfileSettings() {
+  const { playNotificationAlert } = useSoundEffects();
   const { signOut, profile, demo, exitDemo, caregiver } = useAuth();
   const household = useHousehold();
   const {
@@ -345,7 +347,7 @@ export function ProfileSettings() {
                   );
                 })}
               </Card>
-              <Btn kind="s" icon="bell" onPress={() => setNotificationBanner("Pickup time is approaching. This alert is simulated on this device.")}>
+              <Btn kind="s" icon="bell" onPress={() => { playNotificationAlert(); setNotificationBanner("Pickup time is approaching. This alert is simulated on this device."); }}>
                 Test Pop-up Notification
               </Btn>
               <Note>Preferences on this phone only. SafeNest does not send push notifications yet.</Note>

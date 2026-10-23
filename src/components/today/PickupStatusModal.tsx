@@ -5,6 +5,7 @@ import { Icon } from "../navigation/Icon";
 import { clock } from "../shared/circleEngine";
 import { Btn, Press, T, ToneProvider, useColors, useReduce } from "../shared/ui";
 import type { usePickupFlow } from "./usePickupFlow";
+import { useSoundEffects } from "../shared/SoundEffects";
 
 type Props = {
   visible: boolean; childName: string; schoolName: string;
@@ -15,6 +16,7 @@ type Props = {
 };
 // One presentation of the same ETA and pickup decisions used by Today and Plan. No independent GPS requests.
 export function PickupStatusModal({ visible, childName, schoolName, pf, onClose, onExited, onProceed, onGo, onActivateBackup, onReview, backupBusy, proceedBusy = false, proceedError = null }: Props) {
+  const { playPickupChime } = useSoundEffects();
   const baseColors = useColors();
   const colors = { ...baseColors, card: baseColors.heroStart, ink: "#FFFFFF", muted: baseColors.heroMuted,
     primaryInk: "#FFFFFF", primarySoft: "rgba(255,255,255,0.10)", warningInk: "#FFFFFF", danger: "#FFB4AB" };
@@ -97,7 +99,7 @@ export function PickupStatusModal({ visible, childName, schoolName, pf, onClose,
             <Btn kind="p" onPress={onProceed} disabled={pf.busy || backupBusy || proceedBusy} loading={proceedBusy}>I'll proceed with pickup</Btn>
             {warn && !pf.simActive ? <T s={0.8} c="muted">Requesting backup from this preview is unavailable until real pickup permissions are reviewed. Demo Mode supports this action.</T> : null}
             {warn && !pf.statusReady ? <T s={0.8} c="muted">Backup actions here require confirmed journey and request status. Review the existing pickup card if status is unavailable.</T> : null}
-            {warn ? <Btn kind="o" onPress={onActivateBackup} disabled={backupBusy || pf.busy || !pf.statusReady || !pf.simActive} loading={backupBusy}>Request backup from Trusted Circle</Btn> : null}
+            {warn ? <Btn kind="o" onPress={() => { playPickupChime(); onActivateBackup(); }} disabled={backupBusy || pf.busy || !pf.statusReady || !pf.simActive} loading={backupBusy}>Request backup from Trusted Circle</Btn> : null}
             {pf.simActive ? <T s={0.78} c="muted">Use Demo controls on Today to change the clock, location and travel delay.</T> : eta.kind === "permission_needed" ? <Btn kind="o" onPress={() => void pf.run(eta.blocked ? "open_settings" : "enable_location")}>{eta.blocked ? "Open phone settings" : "Allow foreground location"}</Btn>
               : <Btn kind="o" disabled={eta.kind === "checking"} onPress={() => void pf.refreshEta()}>Refresh pickup estimate</Btn>}
             <Btn kind="o" onPress={onGo} disabled={proceedBusy}>{pf.simActive ? "Open this phone's GPS (real location)" : "Open GPS navigation"}</Btn>
