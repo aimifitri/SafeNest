@@ -62,7 +62,7 @@ export function TodayGpsHeader({ model, snapshot, demo, clockLabel, gpsOpen, onD
         <Image source={require("../../../assets/images/logo.png")} style={{ width: 30, height: 30, borderRadius: 15 }} /><T w={700}>SafeNest</T>
       </Glass>
       {clockLabel ? <Glass style={{ padding: 8 }}><T w={700} tab>{clockLabel}</T></Glass> : null}
-      <Press onPress={onDemo} label="Open demo controls" style={{ minHeight: 44, justifyContent: "center" }}><Glass style={{ padding: 10 }}><T w={700}>Demo</T></Glass></Press>
+      {demo ? <Press onPress={onDemo} label="Open demo controls" style={{ minHeight: 44, justifyContent: "center" }}><Glass style={{ padding: 10 }}><T w={700}>Demo</T></Glass></Press> : null}
     </View>
     {model.demoLabel ? (
       <View pointerEvents="none" style={{ position: "absolute", top: insets.top + 62, left: 16 }}>

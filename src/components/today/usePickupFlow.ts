@@ -22,7 +22,7 @@ import { usePickupJourney } from "../shared/usePickupJourney";
 
 // Gathers every source of pickup facts, hands them to derivePickupFlow() once, and runs the action
 // the parent taps. Two layers, never mixed:
-//   1. Demo  (no child stored in Supabase yet, or "Preview the demo" in Demo controls):
+//   1. Demo (explicit Demo Mode only):
 //      a demo clock, mock location and made-up replies from demoSim.ts. Labelled. Nobody is contacted.
 //   2. Real  (a child is stored): real GPS + route, real requests in Supabase, real journeys.
 // The decisions (late? deadline? ask everyone?) are the same pure functions in both layers.
@@ -39,7 +39,8 @@ export function usePickupFlow(screenActive = true) {
   const realMode = ctx.storedChildId !== null;
   // Sample simulation only in Demo Mode (or when the developer toggle forces it for a stored child). A real account
   // with no child yet shows an empty Today instead of a simulated one.
-  const simActive = household.demo || (realMode && simState.forced);
+  // Real accounts always use their stored pickup data. Simulation is exclusive to explicit Demo Mode.
+  const simActive = household.demo;
   const realActive = realMode && !simActive;
 
   const journeyCtl = usePickupJourney(realActive ? ctx.storedChildId : null);

@@ -304,7 +304,7 @@ function TodayDashboardForChild() {
   const headerMap = <TodayGpsHeader key={`${household.pickupScope}:${pf.simActive ? "demo" : "real"}`}
     model={mapModel}
     snapshot={phone.snapshot} demo={pf.simActive} gpsOpen={locationOpen} clockLabel={pf.simActive ? clock(pf.nowMin) : null}
-    onDemo={() => { if (!locationOpen && pickupPopupChildId === null && !demoPresented) { setDemoPresented(true); setDemoOpen(true); } }} onGps={() => { if (!demoPresented && pickupPopupChildId === null) setLocationOpen(true); }}
+    onDemo={() => { if (household.demo && !locationOpen && pickupPopupChildId === null && !demoPresented) { setDemoPresented(true); setDemoOpen(true); } }} onGps={() => { if (!demoPresented && pickupPopupChildId === null) setLocationOpen(true); }}
     onRefresh={() => { void phone.refresh().catch(() => {}); }} onAllow={() => { void phone.request().catch(() => {}); }}
     onSettings={() => { void Linking.openSettings(); }} />;
   const phoneGps = <DeviceLocationModal
@@ -330,7 +330,7 @@ function TodayDashboardForChild() {
     return (
       <AppShell title="SafeNest" badge="Today" activeTab="home" header={canCheck ? headerMap : undefined}>
         {phoneGps}
-        <DemoSheet visible={demoOpen} onClose={() => setDemoOpen(false)} onExited={() => setDemoPresented(false)} pf={pf} />
+        {household.demo ? <DemoSheet visible={demoOpen} onClose={() => setDemoOpen(false)} onExited={() => setDemoPresented(false)} pf={pf} /> : null}
         {!pf.simActive ? <HelperAssignments /> : null}
         {household.error ? <Banner>{household.error}</Banner> : null}
         {!household.ready ? (
@@ -388,7 +388,6 @@ function TodayDashboardForChild() {
             <T s={0.84} c={theme.colors.primaryInk} lh={1.4}>Simulated: time, location and answers. Nobody is contacted. Open Demo controls to move the clock.</T>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               <Btn kind="o" sm onPress={() => setDemoOpen(true)}>Demo controls</Btn>
-              {pf.realMode ? <Btn kind="o" sm onPress={() => sim.setForced(false)}>Back to real state</Btn> : null}
             </View>
           </View>
         </Rise>
@@ -432,7 +431,7 @@ function TodayDashboardForChild() {
           <NavRow href="/circle" icon="circle" title="Trusted circle" sub={`${readyHelpers} helper${readyHelpers === 1 ? "" : "s"} ready to collect`} />
         </Card>
       </Rise>
-      <DemoSheet visible={demoOpen} onClose={() => setDemoOpen(false)} onExited={() => setDemoPresented(false)} pf={pf} />
+      {household.demo ? <DemoSheet visible={demoOpen} onClose={() => setDemoOpen(false)} onExited={() => setDemoPresented(false)} pf={pf} /> : null}
       {phoneGps}
 
       {child && pickupPopupChildId === child.id ? (

@@ -137,6 +137,7 @@ function PickupPlanForChild() {
       <AppShell title="Pickup Plan" badge="Plan" activeTab="plan">
         <Lead>School times and pickup arrangements for each child.</Lead>
         <ChildSelector />
+        {household.error ? <Banner>{household.error}</Banner> : null}
         {!household.ready ? (
           <T c="muted">Loading...</T>
         ) : helper ? (

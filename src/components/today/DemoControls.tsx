@@ -58,16 +58,6 @@ export function DemoSheet({ visible, onClose, pf, onExited }: { visible: boolean
     <Sheet visible={visible} onClose={onClose} onExited={onExited} title="Demo controls" closeLabel="Close demo controls">
       <Banner>Prototype only. A demo clock, a made-up location and made-up answers. Nothing is tracked and nobody is contacted.</Banner>
 
-      {pf.realMode ? (
-        <Group title="What Today shows">
-          <Seg3<"real" | "demo">
-            opts={[{ value: "real", label: "Real", a11y: "Show the real pickup" }, { value: "demo", label: "Demo", a11y: "Preview the demo" }]}
-            cur={s.forced ? "demo" : "real"}
-            onPick={(v) => sim.setForced(v === "demo")}
-          />
-        </Group>
-      ) : null}
-
       <Group title="Quick setups">
         <Card tight style={{ paddingHorizontal: 4 }}>
           {PRESETS.map((p, i) => (
