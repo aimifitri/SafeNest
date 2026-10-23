@@ -13,6 +13,7 @@ import { useChildSchool } from "../shared/HouseholdContext";
 import { pickupDecision, usePickupDecision } from "../shared/pickupDecision";
 import { atMinutes, derivePickupFlow, minutesOfDay, parseClock, resolveCollector, predictedArrivalMinutes } from "../shared/pickupFlow";
 import type { ActionId, Eta, FlowCircle, FlowJourney, FlowRecipient, PickupFlow } from "../shared/pickupFlow";
+import type { EventSource } from "../shared/pickupEvents";
 import { setTeacherCheck, useTeacherCheck } from "../shared/teacherCheck";
 import { useCircleBroadcast } from "../shared/useCircleBroadcast";
 import { usePickupEta } from "../shared/usePickupEta";
@@ -101,6 +102,8 @@ export function usePickupFlow(screenActive = true) {
   let simulated: boolean;
   let collectorKey: string;
   let singleOnly = false;
+  let roundId: string | null = null;
+  let journeyId = "";
 
   const nextLegacyHelper = ctx.trustedHelpers.find((h) => h.state === "active" && isUuid(h.id) && !decision.declined.includes(h.id)) ?? null;
 
@@ -109,11 +112,14 @@ export function usePickupFlow(screenActive = true) {
     nowMs = inp.nowMs; dismissMin = dismissMinutes(simState, env); eta = inp.eta; parentChoice = inp.parentChoice; leaveAt = inp.leaveAt;
     circle = inp.circle; journey = inp.journey; escalation = simState.escalation; eligibleCount = inp.eligibleCount; simulated = true;
     collectorKey = inp.collectorName ?? viewerName;
+    roundId = circle ? `demo:${simState.resetVersion}:${simState.engine.askedAt ?? 0}:${simState.engine.reason}` : null;
+    journeyId = `demo:${simState.resetVersion}:${inp.collectorName ?? ""}`;
   } else {
     nowMs = realNow; dismissMin = planDismiss;
     eta = realMode ? usableEta(etaCtl.eta, realNow) : { kind: "checking" };
     parentChoice = decision.choice; leaveAt = decision.leaveAt; simulated = false;
     const live = journeyCtl.journey;
+    journeyId = live?.id ?? "";
     journey = live
       ? { state: live.state, collectorName: live.collectorName, collectorIsViewer: live.collectorUserId === session?.user.id, endedAt: live.endedAt ? Date.parse(live.endedAt) : null }
       : null;
@@ -125,9 +131,11 @@ export function usePickupFlow(screenActive = true) {
     if (circleCtl.available && b && b.state !== "cancelled") {
       const rows: FlowRecipient[] = b.recipients.map((r) => ({ id: r.requestId, name: r.name, role: r.role, kind: r.kind, status: recipientStatus(r.state) }));
       circle = { recipients: rows, reason: b.reason, collectorName: rows.find((r) => r.status === "accepted")?.name ?? null, simulated: false };
+      roundId = b.id;
     } else if (circleCtl.available === false && ctx.backupRequest.state !== "idle") {
       // Fallback: the database can only ask one helper at a time.
       singleOnly = true;
+      roundId = `single:${ctx.backupRequest.helperId ?? "helper"}`;
       const h = ctx.trustedHelpers.find((x) => x.id === ctx.backupRequest.helperId);
       const st = ctx.backupRequest.state;
       circle = {
@@ -239,8 +247,19 @@ export function usePickupFlow(screenActive = true) {
     else setTeacherCheck(collector.name, "awaitingTeacher");
   };
 
-  const status = pickupStatus(eta, nowMin, dismissMin, flow.phase, child.name, collector.name, realActive && journeyCtl.lastState === "cancelled");
+  const cancelledToday = realActive && journeyCtl.lastState === "cancelled";
+  const status = pickupStatus(eta, nowMin, dismissMin, flow.phase, child.name, collector.name, cancelledToday);
+  // Facts for the automatic Pickup Status pop-up (see shared/pickupEvents.ts). Derived from the same state as everything else.
+  const eventSource: EventSource = {
+    roundId: circle ? roundId : null, reason: circle?.reason ?? "",
+    recipients: circle ? circle.recipients.map((r) => ({ id: r.id, status: r.status })) : [],
+    journey: journey && journeyId ? { id: journeyId, state: journey.state, collectorIsViewer: journey.collectorIsViewer, endedAt: journey.endedAt ?? null } : null,
+    cancelledToday, collectorName: journey ? journey.collectorName : circle?.collectorName ?? null, teacher, now: nowMs,
+  };
   return {
+    eventSource,
+    /** The first complete answer from the journey and request sources has arrived. */
+    eventsReady: simActive || (journeyCtl.ready && circleCtl.available !== null),
     statusReady: simActive || (journeyCtl.ready && circleCtl.available === true && !journeyCtl.error && !circleCtl.error),
     eta, status, nowMs, parentResponded: parentChoice === "will_collect",
     journeyActive: journey !== null,
@@ -253,8 +272,6 @@ export function usePickupFlow(screenActive = true) {
     leaveAt,
     collector,
     collectorRole: people.find((p) => p.name === collector.name)?.role ?? "",
-    /** Database-confirmed pickup journey; null for demo journeys. */
-    liveJourney: simActive ? null : journeyCtl.journey,
     realMode,
     simActive,
     busy,

@@ -34,7 +34,7 @@ type SharedLocation = {
   updated_at: string;
 };
 
-export function TripSharing({ visible, tracking, point }: { visible: boolean; tracking: boolean; point: LocationPoint | null }) {
+export function TripSharing({ visible, tracking, point, hidden = false, showIncoming = false }: { visible: boolean; tracking: boolean; point: LocationPoint | null; hidden?: boolean; showIncoming?: boolean }) {
   const { session, familyId } = useAuth();
   const [guardians, setGuardians] = useState<Guardian[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -211,7 +211,7 @@ export function TripSharing({ visible, tracking, point }: { visible: boolean; tr
   }, [visible]);
 
   return (
-    <View style={{ gap: 10 }}>
+    <View style={{ gap: 10, display: hidden ? "none" : "flex" }}>
       <View style={{ gap: 4 }}>
         <T s={0.72} w={700} c="muted">SHARE THIS TRIP</T>
         <T s={0.84} c="muted" lh={1.35}>Only linked, approved guardians can receive live updates. Sharing ends when you close this screen or after 4 hours.</T>
@@ -249,7 +249,7 @@ export function TripSharing({ visible, tracking, point }: { visible: boolean; tr
         </Btn>
       )}
 
-      {incoming.length ? (
+      {showIncoming && incoming.length ? (
         <View style={{ gap: 8, marginTop: 6 }}>
           <T s={0.72} w={700} c="muted">SHARED WITH YOU</T>
           {incoming.map((share) => {

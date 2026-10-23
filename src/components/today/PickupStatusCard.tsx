@@ -10,8 +10,6 @@ import { Btn, Err, Press, Rise, T, useEffectiveScale, useTone } from "../shared/
 import { CircleRows } from "./CircleRows";
 import { CollectorCard, StepBar } from "./JourneyProgress";
 import { LeaveSheet, TeacherLateSheet, TeacherPhotoSheet } from "./TeacherSheets";
-import { PickupLocationControls, PickupLocationViewer } from "./PickupLocation";
-import { useAuth } from "../shared/AuthContext";
 import type { usePickupFlow } from "./usePickupFlow";
 
 type Flow = ReturnType<typeof usePickupFlow>;
@@ -21,7 +19,6 @@ type OpenSheet = null | "photo" | "late" | "leave";
 // when school ends, whether they can arrive in time, who was asked, and the next step.
 // Nothing here decides anything. Pressing "Find trusted backup" asks EVERYONE eligible at once.
 export function PickupStatusCard({ pf, childName }: { pf: Flow; childName: string }) {
-  const { session } = useAuth();
   const { flow } = pf;
   const [sheet, setSheet] = useState<OpenSheet>(null);
   const [more, setMore] = useState(false);
@@ -95,11 +92,6 @@ export function PickupStatusCard({ pf, childName }: { pf: Flow; childName: strin
             <T s={0.95} lh={1.4} c="muted">{flow.detail}</T>
           </View>
           {flow.showCollector ? <CollectorCard name={pf.collector.name} role={pf.collectorRole} simulated={flow.simulated} /> : null}
-          {!flow.simulated && pf.liveJourney && (pf.liveJourney.state === "started" || pf.liveJourney.state === "at_school") ? (
-            pf.liveJourney.collectorUserId === session?.user.id
-              ? <PickupLocationControls journeyId={pf.liveJourney.id} />
-              : <PickupLocationViewer journeyId={pf.liveJourney.id} collectorName={pf.liveJourney.collectorName} />
-          ) : null}
           <Facts items={flow.showCollector ? flow.facts.filter((f) => f.label !== "Collector") : flow.facts} />
           {flow.steps ? <StepBar steps={flow.steps} /> : null}
 
