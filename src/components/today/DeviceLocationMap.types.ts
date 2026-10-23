@@ -13,6 +13,10 @@ export type RouteCoordinate = DeviceLocationCoordinate;
 
 export type DeviceLocationMapProps = {
   point: DeviceLocationPoint | null;
+  /** Header camera: first fix only, then explicit recenter. Navigation retains automatic behavior. */
+  cameraMode?: "automatic" | "explore";
+  recenterRequest?: number;
+  additionalPoints?: readonly (DeviceLocationPoint & { id: string })[];
   destination?: DeviceLocationCoordinate | null;
   destinationTitle?: string;
   showPreview?: boolean;

@@ -23,6 +23,8 @@ const TRAVEL_STEPS = 10;
 const TRAVEL_STEP_MS = 650;
 
 export type SimState = {
+  /** Child-scoped episode identity: invalidates old UI actions and warning acknowledgements on reset. */
+  resetVersion: number;
   /** Show the demo on Today. Always on when no child is stored in Supabase. */
   forced: boolean;
   /** Demo clock, minutes after midnight. */
@@ -49,6 +51,7 @@ export type SimState = {
 };
 
 export const SIM_START: SimState = {
+  resetVersion: 0,
   forced: false,
   now: 12 * 60 + 5,
   dismissOverride: null,
@@ -75,9 +78,21 @@ export type SimEnv = {
 };
 
 let state: SimState = SIM_START;
+let scope = "default";
+const scopes = new Map<string, SimState>();
 let timers: ReturnType<typeof setTimeout>[] = [];
 let travelTimer: ReturnType<typeof setTimeout> | null = null;
 const stopTravel = () => { if (travelTimer) clearTimeout(travelTimer); travelTimer = null; };
+function resumeTravel() {
+  if (travelTimer || state.engine.stage !== "travelling" || state.travel >= 1) return;
+  travelTimer = setTimeout(() => {
+    travelTimer = null;
+    if (state.engine.stage !== "travelling") return;
+    set({ travel: Math.min(1, state.travel + 1 / TRAVEL_STEPS) });
+    resumeTravel();
+  }, TRAVEL_STEP_MS);
+}
+let resumeScope = false;
 let lastEnv: SimEnv | null = null;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
@@ -178,6 +193,13 @@ export function answer(id: string, ans: "yes" | "no" | "none", env: SimEnv = las
 // ---------- the controls ----------
 
 export const sim = {
+  selectScope(nextScope: string, secondDemo = false) {
+    if (scope === nextScope) return;
+    scopes.set(scope, state); clearTimers(); stopTravel(); lastEnv = null;
+    scope = nextScope; resumeScope = true;
+    state = scopes.get(scope) ?? (secondDemo ? { ...SIM_START, escalation: { ...SIM_START.escalation, enabled: false, minutesBefore: 10 }, engine: { ...E.initialEngine, stage: "covered", reason: "manual", collector: "siti", replies: { siti: "yes" }, askedAt: SIM_START.now } } : { ...SIM_START });
+    emit();
+  },
   get: () => state,
   setForced: (forced: boolean) => set({ forced }),
   setNow: (now: number, env: SimEnv) => { set({ now: Math.max(0, Math.min(23 * 60 + 59, now)) }); sim.tick(env); },
@@ -194,6 +216,11 @@ export const sim = {
   /** The original tick(): called after anything changes. Starts the automatic request at most once. */
   tick(env: SimEnv) {
     lastEnv = env;
+    if (resumeScope) {
+      resumeScope = false;
+      if (state.engine.stage === "circle") scheduleScript(env);
+      resumeTravel();
+    }
     const ctx = engineContext(state, env);
     let engine = E.expire(state.engine, state.now, state.escalation);
     engine = E.tick(engine, ctx, env.people, env.viewerId);
@@ -211,7 +238,8 @@ export const sim = {
     switch (action) {
       case "still_collect": set({ engine: E.commit(prev) }); return true;
       case "find_backup": {
-        const next = E.fire(prev, env.people, env.viewerId, "manual", state.now);
+        // An explicit backup action may replace the parent's commitment; it cannot replace an assigned collector.
+        const next = E.fire(prev.stage === "committed" ? { ...prev, stage: "plan", leaveAt: null } : prev, env.people, env.viewerId, "manual", state.now);
         if (next === prev) return false;
         set({ engine: next }); afterEngine(prev, env); return true;
       }
@@ -253,14 +281,8 @@ export const sim = {
     const next = E.depart(prev);
     if (next === prev) return false;
     set({ engine: next, travel: 0 });
-    const step = () => {
-      if (state.engine.stage !== "travelling") { stopTravel(); return; }
-      const travel = Math.min(1, state.travel + 1 / TRAVEL_STEPS);
-      set({ travel });
-      travelTimer = travel < 1 ? setTimeout(step, TRAVEL_STEP_MS) : null;
-    };
     stopTravel();
-    travelTimer = setTimeout(step, TRAVEL_STEP_MS);
+    resumeTravel();
     sim.tick(env);
     return true;
   },
@@ -295,7 +317,7 @@ export const sim = {
     clearTimers(); stopTravel();
     lastEnv = env;
     for (const p of env.people) setTeacherCheck(p.name, "notStarted");
-    state = { ...SIM_START, forced: state.forced, escalation: { ...state.escalation }, autoReplies: state.autoReplies };
+    state = { ...SIM_START, resetVersion: state.resetVersion + 1, forced: state.forced, escalation: { ...state.escalation }, autoReplies: state.autoReplies };
     emit();
     sim.tick(env);
   },

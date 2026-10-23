@@ -2,6 +2,7 @@ import { Link } from "expo-router";
 import { useEffect, useState } from "react";
 import { View } from "react-native";
 
+import { ChildSelector } from "./ChildSelector";
 import { Icon } from "../navigation/Icon";
 import { AppShell } from "../shared/AppShell";
 import { useAppContext } from "../shared/AppContext";
@@ -36,6 +37,10 @@ const SHOW_ACTIVE_PICKUP_PANELS = false;
 const validTime = /^(?:1[0-2]|[1-9]):[0-5][0-9] (?:AM|PM)$/;
 
 export function PickupPlan() {
+  const { household } = useChildSchool();
+  return <PickupPlanForChild key={household.pickupScope} />;
+}
+function PickupPlanForChild() {
   const { theme, temporaryDismissal, setTemporaryDismissal, weeklySchedule, updateWeekdayTime } = useAppContext();
   // One shared answer for Today and Plan: who is collecting and who was asked.
   const pf = usePickupFlow();
@@ -130,6 +135,8 @@ export function PickupPlan() {
     const helper = profile?.accountType === "helper";
     return (
       <AppShell title="Pickup Plan" badge="Plan" activeTab="plan">
+        <Lead>School times and pickup arrangements for each child.</Lead>
+        <ChildSelector />
         {!household.ready ? (
           <T c="muted">Loading...</T>
         ) : helper ? (
@@ -148,6 +155,7 @@ export function PickupPlan() {
   return (
     <AppShell title="Pickup Plan" badge="Plan" activeTab="plan">
       <Lead>School times, today's change and who collects for {child.name}.</Lead>
+      <ChildSelector />
       {notice ? <Banner key={notice} kind="ok">{notice}</Banner> : null}
 
       <SectionHeading title="Today" />

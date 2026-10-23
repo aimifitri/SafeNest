@@ -17,7 +17,8 @@ type BrowserCapabilities = {
   };
 };
 
-export function InvitationSheet({ visible, onClose, actor, state, onGenerate, onAccept, onApprove }: {
+export function InvitationSheet({ visible, onClose, actor, state, onGenerate, onAccept, onApprove, embedded = false }: {
+  embedded?: boolean;
   visible: boolean;
   onClose: () => void;
   actor: DemoActor | null;
@@ -60,8 +61,8 @@ export function InvitationSheet({ visible, onClose, actor, state, onGenerate, on
       setBusy(false);
     }
   };
-  return (
-    <Sheet visible={visible} onClose={onClose} title="Demo invitation" closeLabel="Close demo invitation">
+  const content = (
+    <>
       <Banner>Simulation as Abu, a fictional family administrator. Your signed-in account's permissions are unchanged. No valid link, token or invitation is created.</Banner>
       <T lh={1.45}>An administrator creates an invitation. A helper accepts, then waits for administrator approval. Only approved helpers may eventually receive pickup requests.</T>
       {!state.invitation ? <Btn kind="p" icon="plus" onPress={onGenerate}>Generate demo invitation preview</Btn> : (
@@ -92,6 +93,7 @@ export function InvitationSheet({ visible, onClose, actor, state, onGenerate, on
       {feedback ? <Banner>{feedback}</Banner> : null}
       <Err text={error} />
       <T s={0.82} c="muted">Invitation and membership changes survive fictional persona changes but reset on authenticated account change or screen remount. Sharing this preview cannot join a family.</T>
-    </Sheet>
+    </>
   );
+  return embedded ? content : <Sheet visible={visible} onClose={onClose} title="Demo invitation" closeLabel="Close demo invitation">{content}</Sheet>;
 }

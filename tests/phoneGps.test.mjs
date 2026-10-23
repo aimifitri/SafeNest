@@ -1,0 +1,65 @@
+import { build } from "esbuild";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "safenest-phone-gps-"));
+let passed = 0;
+const test = async (name, run) => { await run(); passed++; console.log("PASS", name); };
+const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+try {
+  const out = path.join(dir, "phone.mjs");
+  await build({ stdin: { contents: "export * from './src/components/shared/phoneLocation'; export * from './src/components/today/proceedPickup';", resolveDir: process.cwd(), loader: "ts" }, bundle: true, platform: "node", format: "esm", outfile: out, logLevel: "silent" });
+  const S = await import(pathToFileURL(out).href);
+  await test("Proceed waits for commitment success before requesting the existing GPS transition", async () => {
+    const gate = S.createProceedPickup(), commit = deferred(), events = [];
+    const pending = gate.run(() => commit.promise, () => true, () => { events.push("close-status", "open-existing-gps-after-exit"); });
+    assert.deepEqual(events, []); commit.resolve(true);
+    assert.equal(await pending, "success"); assert.deepEqual(events, ["close-status", "open-existing-gps-after-exit"]);
+  });
+  await test("failed commitment never opens GPS", async () => { let opened = false; const gate = S.createProceedPickup(); assert.equal(await gate.run(async () => false, () => true, () => { opened = true; }), "failed"); assert.equal(opened, false); });
+  await test("commitment exceptions permit retry without false success", async () => { const gate = S.createProceedPickup(); assert.equal(await gate.run(async () => { throw Error("failed"); }, () => true, () => assert.fail()), "failed"); assert.equal(await gate.run(async () => true, () => true, () => {}), "success"); });
+  await test("fast double taps do not repeat commitment or open duplicate GPS screens", async () => { const gate = S.createProceedPickup(), commit = deferred(); let calls = 0, opens = 0; const run = () => gate.run(() => { calls++; return commit.promise; }, () => true, () => { opens++; }); const pending = run(); assert.equal(await run(), "busy"); commit.resolve(true); await pending; assert.equal(calls, 1); assert.equal(opens, 1); });
+  await test("child switching cancels a late successful commitment transition", async () => { const gate = S.createProceedPickup(), commit = deferred(); const pending = gate.run(() => commit.promise, () => true, () => assert.fail()); gate.invalidate(); commit.resolve(true); assert.equal(await pending, "cancelled"); });
+  await test("leaving Today/backgrounding cannot open GPS from an old response", async () => { assert.equal(await S.createProceedPickup().run(async () => true, () => false, () => assert.fail()), "cancelled"); });
+  const lailaSchool = { name: "Laila school", address: "Laila address" }, hanaSchool = { name: "Hana school", address: "Hana address" };
+  await test("navigation target uses the selected child's actual school and stable ID", () => { const laila = S.schoolNavigationTarget({ id: "laila" }, lailaSchool, { latitude: 3, longitude: 101 }); const hana = S.schoolNavigationTarget({ id: "hana" }, hanaSchool, { latitude: 4, longitude: 102 }); assert.equal(laila.childId, "laila"); assert.equal(laila.name, "Laila school"); assert.equal(hana.childId, "hana"); assert.equal(hana.name, "Hana school"); assert.equal(hana.coordinate.latitude, 4); assert.notDeepEqual(hana.coordinate, laila.coordinate); });
+  await test("missing or invalid school pin stays unavailable instead of reusing another child", () => { assert.equal(S.schoolNavigationTarget({ id: "hana" }, hanaSchool, null).coordinate, null); assert.equal(S.schoolNavigationTarget({ id: "hana" }, hanaSchool, { latitude: 999, longitude: 101 }).coordinate, null); });
+  let now = 1_800_000_000_000;
+  const fix = () => ({ timestamp: now, coords: { latitude: 3.12, longitude: 101.34, accuracy: 12 } });
+  const create = (overrides = {}) => S.createPhoneLocation({ permission: async () => ({ granted: true, canAskAgain: true }), services: async () => true, position: async () => fix(), reverse: async () => "Actual test city, Region", now: () => now, ...overrides });
+  await test("real summary uses injected actual phone fix and reverse-geocoded area", async () => { const phone = create(); await phone.read(); await flush(); const view = S.phoneLocationView(phone.get(), now); assert.equal(view.title, "Your current location"); assert.equal(view.label, "Actual test city, Region"); assert.equal(view.current, true); assert.match(view.detail, /12 m/); });
+  await test("reverse-geocoding failure safely falls back to actual coordinates", async () => { const phone = create({ reverse: async () => { throw Error("unavailable"); } }); await phone.read(); await flush(); assert.equal(S.phoneLocationView(phone.get(), now).label, "3.12000, 101.34000"); });
+  await test("header location works without school coordinates or a route", async () => { const phone = create(); assert.equal((await phone.read()).coords.latitude, 3.12); });
+  await test("Demo Mode summary remains simulated even if an earlier real fix exists", async () => { const phone = create(); await phone.read(); const view = S.phoneLocationView(phone.get(), now, "At work (demo)"); assert.equal(view.title, "Simulated location"); assert.equal(view.label, "At work (demo)"); assert.equal(view.current, false); assert.doesNotMatch(view.label + view.detail, /3\.12000|101\.34000/); });
+  await test("denied permission clears the fix and never obtains GPS", async () => { let positions = 0; const phone = create({ permission: async () => ({ granted: false, canAskAgain: false }), position: async () => { positions++; return fix(); } }); await assert.rejects(phone.read(), /permission_needed/); assert.equal(positions, 0); assert.equal(phone.get().kind, "permission_needed"); assert.equal(phone.get().blocked, true); assert.equal(phone.get().fix, null); });
+  await test("permission is requested only by an explicit Allow action", async () => { const asked = []; const phone = create({ permission: async ask => { asked.push(ask); return { granted: ask, canAskAgain: true }; } }); await assert.rejects(phone.read()); await phone.read(true, true); assert.deepEqual(asked, [false, true]); });
+  await test("disabled location services do not obtain coordinates", async () => { let calls = 0; const phone = create({ services: async () => false, position: async () => { calls++; return fix(); } }); await assert.rejects(phone.read(), /location_disabled/); assert.equal(calls, 0); assert.match(S.phoneLocationView(phone.get(), now).detail, /Turn on/); });
+  await test("inaccurate readings are unavailable and never labelled current", async () => { const phone = create({ position: async () => ({ ...fix(), coords: { ...fix().coords, accuracy: 500 } }) }); await assert.rejects(phone.read(), /weak_gps/); assert.equal(phone.get().fix, null); assert.equal(S.phoneLocationView(phone.get(), now).current, false); });
+  await test("stale readings cannot become a current phone position", async () => { const phone = create({ position: async () => ({ ...fix(), timestamp: now - 70_000 }) }); await assert.rejects(phone.read(), /stale_gps/); assert.equal(S.phoneLocationView(phone.get(), now).current, false); });
+  await test("an ageing displayed fix is explicitly stale", async () => { const phone = create(); await phone.read(); const view = S.phoneLocationView(phone.get(), now + 61_000); assert.equal(view.title, "Last location is stale"); assert.equal(view.current, false); });
+  await test("concurrent Today and ETA readers share one sensor request", async () => { let calls = 0; const phone = create({ position: async () => { calls++; return fix(); } }); await Promise.all([phone.read(), phone.read(), phone.read()]); assert.equal(calls, 1); await phone.read(); assert.equal(calls, 1); });
+  await test("fresh GPS modal updates can feed ETA without a second sensor subscription", async () => { let calls = 0; const phone = create({ position: async () => { calls++; return fix(); } }); phone.accept(fix()); assert.equal((await phone.read()).coords.latitude, 3.12); assert.equal(calls, 0); });
+  await test("late position cannot repopulate a blurred/unmounted child's location", async () => { const result = deferred(); const phone = create({ position: () => result.promise }); const pending = phone.read(); await flush(); phone.invalidate(); result.resolve(fix()); await assert.rejects(pending, /cancelled/); assert.equal(phone.get().fix, null); });
+  await test("late reverse lookup cannot restore a previous user's location label", async () => { const result = deferred(); const phone = create({ reverse: () => result.promise }); await phone.read(); phone.invalidate(); result.resolve("Wrong old owner"); await flush(); assert.equal(phone.get().label, null); assert.equal(phone.get().fix, null); });
+  await test("leaving Today cancels timer/listener and ignores subsequent refresh callbacks", async () => {
+    let timer, appState, timers = 0, removed = 0, unsubscribed = 0, positions = 0;
+    const phone = create({ position: async () => { positions++; return fix(); } });
+    const stop = S.monitorPhoneLocation(phone, { isActive: () => true, every: cb => { timer = cb; timers++; return () => { removed++; }; }, onAppState: cb => { appState = cb; return () => { unsubscribed++; }; } });
+    await flush(); assert.equal(positions, 1); assert.equal(timers, 1); stop(); timer(); appState("active"); await flush();
+    assert.equal(removed, 1); assert.equal(unsubscribed, 1); assert.equal(positions, 1); assert.equal(phone.get().fix, null);
+  });
+  await test("backgrounding clears phone data without starting background tracking", async () => { let state; let active = true; let positions = 0; const phone = create({ position: async () => { positions++; return fix(); } }); const stop = S.monitorPhoneLocation(phone, { isActive: () => active, every: () => () => {}, onAppState: cb => { state = cb; return () => {}; } }); await flush(); active = false; state("background"); assert.equal(phone.get().fix, null); state("active"); await flush(); assert.equal(positions, 1); stop(); });
+  await test("new integration preserves backup restrictions and isolates Demo Mode sharing", () => {
+    const dashboard = fs.readFileSync("src/components/today/TodayDashboard.tsx", "utf8");
+    const gps = fs.readFileSync("src/components/today/DeviceLocation.tsx", "utf8");
+    const modal = fs.readFileSync("src/components/today/PickupStatusModal.tsx", "utf8");
+    assert.match(dashboard, /allowSharing=\{!pf.simActive\}/); assert.match(dashboard, /schoolLocation=\{gpsTarget.coordinate\}/); assert.match(dashboard, /key=\{household.pickupScope\}/);
+    assert.match(gps, /allowSharing \? <TripSharing/); assert.match(gps, /Saved school coordinates are unavailable/);
+    assert.match(modal, /!pf.simActive/);
+    assert.doesNotMatch(fs.readFileSync("src/components/shared/phoneLocation.ts", "utf8"), /supabase|watchPositionAsync|startLocationUpdatesAsync/);
+  });
+  console.log(`\n${passed} phone-GPS assertions passed.`);
+} finally { fs.rmSync(dir, { recursive: true, force: true }); }

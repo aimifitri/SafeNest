@@ -11,7 +11,7 @@ import {
   subscribeToJourneys,
   toLiveJourney,
 } from "./pickupJourneyApi";
-import type { LiveJourney } from "./pickupJourneyApi";
+import type { LiveJourney, JourneyState } from "./pickupJourneyApi";
 
 /**
  * The latest pickup journey for a stored child, kept up to date live.
@@ -19,6 +19,8 @@ import type { LiveJourney } from "./pickupJourneyApi";
  * Every action resolves true only after the server confirmed it.
  */
 export function usePickupJourney(childId: string | null) {
+  const [lastState, setLastState] = useState<JourneyState | null>(null);
+  const [ready, setReady] = useState(false);
   const [journey, setJourney] = useState<LiveJourney | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,7 +32,12 @@ export function usePickupJourney(childId: string | null) {
     if (!childId) return;
     const res = await fetchLatestJourney(childId);
     if (res.ok) {
-      setJourney(toLiveJourney(res.data));
+      const live = toLiveJourney(res.data);
+      setJourney(live);
+      setReady(true);
+      const cancelledToday = res.data?.state === "cancelled" && res.data.ended_at
+        && new Date(res.data.ended_at).toDateString() === new Date().toDateString();
+      setLastState(live?.state ?? (cancelledToday ? "cancelled" : null));
       if (refreshErrorRef.current) {
         refreshErrorRef.current = false;
         setError(null);
@@ -48,6 +55,7 @@ export function usePickupJourney(childId: string | null) {
   useEffect(() => {
     if (!childId) {
       setJourney(null);
+      setReady(false);
       return;
     }
     void refresh();
@@ -82,6 +90,8 @@ export function usePickupJourney(childId: string | null) {
   return {
     enabled: childId !== null,
     journey,
+    ready,
+    lastState,
     busy,
     error,
     clearError: () => setError(null),

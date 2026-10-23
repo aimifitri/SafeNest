@@ -11,7 +11,7 @@ const REL_OPTIONS = RELATIONSHIPS.map((r) => ({ value: r, label: r }));
  * Adds someone to the Trusted Circle as PENDING. Being related to the child does not approve anyone: a guardian does
  * that on the next step. Everyone must confirm they are an adult, since a helper may collect a child.
  */
-export function HelperForm({ submitLabel = "Add to Trusted Circle", onSubmit, onCancel }: { submitLabel?: string; onSubmit: (d: HelperDraft) => Promise<string | null>; onCancel?: () => void }) {
+export function HelperForm({ submitLabel = "Add to Trusted Circle", onSubmit, onCancel, submissionDisabled = false }: { submissionDisabled?: boolean; submitLabel?: string; onSubmit: (d: HelperDraft) => Promise<string | null>; onCancel?: () => void }) {
   const c = useColors();
   const [d, setD] = useState<HelperDraft>(emptyHelperDraft());
   const [errors, setErrors] = useState<StepErrors>({});
@@ -22,7 +22,7 @@ export function HelperForm({ submitLabel = "Add to Trusted Circle", onSubmit, on
     if (errors[k]) setErrors((e) => { const { [k as string]: _x, ...rest } = e; return rest; });
   };
   const submit = async () => {
-    if (busy) return;
+    if (busy || submissionDisabled) return;
     const e = validateHelperDraft(d);
     setErrors(e);
     if (Object.keys(e).length) return;
@@ -52,7 +52,7 @@ export function HelperForm({ submitLabel = "Add to Trusted Circle", onSubmit, on
       <T s={0.82} c="muted" lh={1.4}>They start as pending. Being family does not approve them. You approve each person yourself, and the teacher still checks who arrives.</T>
       <Err text={formError} />
       <View style={{ gap: 10 }}>
-        <Btn onPress={() => void submit()} loading={busy} label={submitLabel}>{submitLabel}</Btn>
+        <Btn disabled={submissionDisabled} onPress={() => void submit()} loading={busy} label={submitLabel}>{submitLabel}</Btn>
         {onCancel ? <Btn kind="o" onPress={onCancel} disabled={busy} label="Cancel">Cancel</Btn> : null}
       </View>
     </View>

@@ -27,7 +27,7 @@ export const PICKUP_CONFIG = {
 export type Eta =
   | { kind: "permission_needed"; blocked: boolean }
   | { kind: "checking" }
-  | { kind: "unavailable"; reason: "no_school_location" | "no_gps" | "network" }
+  | { kind: "unavailable"; reason: "no_school_location" | "no_gps" | "network" | "stale_gps" | "weak_gps" | "location_disabled" }
   | {
       kind: "ready";
       /** Travel time in minutes. */
@@ -36,6 +36,8 @@ export type Eta =
       source: "route" | "demo";
       /** When the position was read (real) or the demo clock time (demo), as epoch ms. */
       checkedAt: number;
+      accuracy?: number | null;
+      positionTimestamp?: number;
     };
 
 export type FlowJourney = {
@@ -457,6 +459,9 @@ export function derivePickupFlow(input: FlowInput): PickupFlow {
         ? eta.blocked ? "Location is turned off for SafeNest." : "SafeNest needs your phone's location to estimate your trip."
         : eta.kind === "checking" ? "Estimating your travel time."
         : eta.reason === "no_school_location" ? "SafeNest does not have the school's location yet."
+        : eta.reason === "stale_gps" ? "The location reading is too old. Refresh before relying on this estimate."
+        : eta.reason === "weak_gps" ? "The location signal is too imprecise. Try again with better reception."
+        : eta.reason === "location_disabled" ? "Turn on this phone's location services."
         : eta.reason === "no_gps" ? "Your phone could not find its location."
         : "SafeNest could not reach the route service.";
     const cantTell = `Because it can't tell if you will be late, it will not ask anyone on its own. It will alert you at ${deadline}.`;

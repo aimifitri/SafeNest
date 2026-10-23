@@ -14,6 +14,8 @@ type Snapshot = {
 
 const empty: Snapshot = { choice: "none", leaveAt: null, declined: [] };
 let snap: Snapshot = empty;
+let scope = "default";
+const scopes = new Map<string, Snapshot>();
 const listeners = new Set<() => void>();
 const set = (next: Partial<Snapshot>) => {
   snap = { ...snap, ...next };
@@ -21,6 +23,7 @@ const set = (next: Partial<Snapshot>) => {
 };
 
 export const pickupDecision = {
+  selectScope(next: string) { if (scope === next) return; scopes.set(scope, snap); scope = next; snap = scopes.get(scope) ?? empty; listeners.forEach(listener => listener()); },
   get: () => snap,
   willCollect: (leaveAt: number | null = null) => set({ choice: "will_collect", leaveAt }),
   clearChoice: () => set({ choice: "none", leaveAt: null }),

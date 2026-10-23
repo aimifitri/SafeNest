@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PropsWithChildren } from "react";
 import { AppState } from "react-native";
 
@@ -28,6 +28,11 @@ import {
   type Missing,
   type PendingFamilyInvite,
 } from "./householdApi";
+import { demoChildren, demoChildFromDraft, resolveChild, childScope, SECOND_DEMO_CHILD_ID } from "./childScope";
+import { validateChildDraft } from "./accountRules";
+import { sim } from "./demoSim";
+import { pickupDecision } from "./pickupDecision";
+import { selectTeacherScope } from "./teacherCheck";
 import { mockData } from "./mockData";
 import type { ApiResult } from "./backupApi";
 import type { ContactState, School } from "./types";
@@ -46,6 +51,8 @@ export type Household = {
   familyId: string | null;
   familyName: string;
   children: HChild[];
+  pickupScope: string;
+  selectChild: (id: string) => void;
   /** The child SafeNest is currently about. null for a new account that has not added one. */
   child: HChild | null;
   school: School | null;
@@ -99,10 +106,21 @@ const demoMembers = (): HMember[] =>
 
 const demoRefuse = <T,>(): Promise<ApiResult<T>> => Promise.resolve({ ok: false, error: "Demo Mode does not save anything. Create an account to use this." });
 
-export function HouseholdProvider({ children: kids }: PropsWithChildren) {
+let householdSession = 0;
+
+export function HouseholdProvider({ children }: PropsWithChildren) {
+  const { demo, familyId, session } = useAuth();
+  return <HouseholdDataProvider key={JSON.stringify([demo, session?.user.id, familyId])}>{children}</HouseholdDataProvider>;
+}
+function HouseholdDataProvider({ children: kids }: PropsWithChildren) {
   const { demo, familyId, session, profile, caregiver } = useAuth();
   const userId = session?.user.id ?? null;
 
+  const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
+  const [demoKids, setDemoKids] = useState<HChild[]>(demoChildren);
+  const childCreation = useRef(false);
+  // A new account/household/Demo Mode session cannot restore a previous session's transient pickup state.
+  const [sessionScope] = useState(() => String(++householdSession));
   const [kidsList, setKidsList] = useState<HChild[]>([]);
   const [helpers, setHelpers] = useState<HHelper[]>([]);
   const [members, setMembers] = useState<HMember[]>([]);
@@ -180,15 +198,30 @@ export function HouseholdProvider({ children: kids }: PropsWithChildren) {
     [load],
   );
 
+  const availableChildren = demo ? demoKids : kidsList;
+  const selectedChild = resolveChild(availableChildren, selectedChildId);
+  const pickupScope = sessionScope + childScope(demo ? "demo" : userId ?? "signed-out", familyId, selectedChild?.id ?? null);
+  useLayoutEffect(() => {
+    sim.selectScope(pickupScope, demo && selectedChild?.id === SECOND_DEMO_CHILD_ID);
+    pickupDecision.selectScope(pickupScope);
+    selectTeacherScope(pickupScope);
+  }, [pickupScope]);
+  const selectChild = (id: string) => { if (availableChildren.some(child => child.id === id)) setSelectedChildId(id); };
   const value = useMemo<Household>(() => {
     if (demo) {
-      const c = demoChild();
+      const c = selectedChild ?? demoChild();
       return {
         demo: true, ready: true, loading: false, error: null, familyId: null, familyName: "Abu and Siti's family (demo)",
-        children: [c], child: c, school: { ...mockData.school },
+        children: demoKids, child: c, pickupScope, selectChild, school: { name: c.schoolName, address: c.schoolAddress, teacher: c.teacherName, teacherPhone: c.teacherPhone },
         helpers: demoHelperState, members: demoMembers(), namesAvailable: true, familyInvites: [], version: 0,
         refresh: async () => {},
-        addChild: () => demoRefuse<string>(),
+        addChild: async d => {
+          if (Object.keys(validateChildDraft(d)).length) return { ok: false, error: "Complete the required child details." };
+          const id = `demo-child-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          setDemoKids(current => [...current, demoChildFromDraft(d, id)]);
+          setSelectedChildId(id);
+          return { ok: true, data: id };
+        },
         updateChild: () => demoRefuse<null>(),
         deleteChild: () => demoRefuse<null>(),
         addHelper: async (d) => {
@@ -212,16 +245,23 @@ export function HouseholdProvider({ children: kids }: PropsWithChildren) {
         renameFamily: () => demoRefuse<null>(),
       };
     }
-    const first = kidsList[0] ?? null;
+    const first = selectedChild;
     const school: School | null = first
       ? { name: first.schoolName, address: first.schoolAddress, teacher: first.teacherName, teacherPhone: first.teacherPhone }
       : null;
     const need = <T,>(): Promise<ApiResult<T>> => Promise.resolve({ ok: false, error: "Your family account is not ready yet." });
     return {
-      demo: false, ready, loading, error, familyId, familyName, children: kidsList, child: first, school,
+      demo: false, ready, loading, error, familyId, familyName, pickupScope, selectChild, children: kidsList, child: first, school,
       helpers, members, namesAvailable, familyInvites, version,
       refresh: load,
-      addChild: (d) => (familyId ? after(apiAddChild(familyId, d)) : need<string>()),
+      addChild: async d => {
+        if (!familyId) return need<string>();
+        if (childCreation.current) return { ok: false, error: "A child is already being saved. Please wait." };
+        if (Object.keys(validateChildDraft(d)).length) return { ok: false, error: "Complete the required child details." };
+        childCreation.current = true;
+        try { const result = await after(apiAddChild(familyId, d)); if (result.ok) setSelectedChildId(result.data); return result; }
+        finally { childCreation.current = false; }
+      },
       updateChild: (id, d) => after(apiUpdateChild(id, d)),
       deleteChild: (id) => after(apiDeleteChild(id)),
       addHelper: (d) => (familyId ? after(apiAddHelper(familyId, d)) : need<string>()),
@@ -243,7 +283,7 @@ export function HouseholdProvider({ children: kids }: PropsWithChildren) {
       setMemberCanCollect: (uid, on) => (familyId ? after(apiSetMemberCanCollect(familyId, uid, on)) : need<null>()),
       renameFamily: (name) => (familyId ? after(apiRenameFamily(familyId, name)) : need<null>()),
     };
-  }, [demo, demoHelperState, ready, loading, error, familyId, familyName, kidsList, helpers, members, namesAvailable, familyInvites, version, load, after]);
+  }, [demo, demoKids, selectedChild, pickupScope, demoHelperState, ready, loading, error, familyId, familyName, kidsList, helpers, members, namesAvailable, familyInvites, version, load, after]);
 
   return <HouseholdContext.Provider value={value}>{kids}</HouseholdContext.Provider>;
 }

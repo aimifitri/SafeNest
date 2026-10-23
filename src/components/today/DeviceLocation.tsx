@@ -1,13 +1,14 @@
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import type { LocationObject, LocationSubscription } from "expo-location";
 import * as Location from "expo-location";
 import { useEffect, useRef, useState } from "react";
 import { AppState, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, View } from "react-native";
-import { MaterialCommunityIcons } from "@expo/vector-icons";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Icon } from "../navigation/Icon";
 import { useAppContext } from "../shared/AppContext";
+import { LOCATION_POLICY, locationIssueMessage, positionIssue, withDeadline } from "../shared/locationQuality";
 import { mockData } from "../shared/mockData";
 import { Btn, Input, Press, T, useReduce } from "../shared/ui";
 import { DeviceLocationMap } from "./DeviceLocationMap";
@@ -31,6 +32,9 @@ type DeviceLocationModalProps = {
   schoolName?: string;
   schoolAddress?: string;
   schoolLocation?: DeviceLocationCoordinate | null;
+  requireSavedSchoolLocation?: boolean;
+  demoPreview?: boolean;
+  allowSharing?: boolean;
   onLocationUpdate?: (update: LiveLocationUpdate) => void;
   onLocationError?: (error: Error) => void;
 };
@@ -292,6 +296,9 @@ export function DeviceLocationModal({
   schoolLocation: plannedSchoolLocation,
   onLocationUpdate,
   onLocationError,
+  requireSavedSchoolLocation = false,
+  demoPreview = false,
+  allowSharing = true,
 }: DeviceLocationModalProps) {
   const {
     theme,
@@ -315,6 +322,7 @@ export function DeviceLocationModal({
   const progressIndexRef = useRef(0);
   const callbacks = useRef({ onLocationUpdate, onLocationError });
   callbacks.current = { onLocationUpdate, onLocationError };
+  const [gpsNow, setGpsNow] = useState(Date.now);
   const [location, setLocation] = useState<LocationObject | null>(null);
   const locationRef = useRef<LocationObject | null>(null);
   const [currentLatitude, setCurrentLatitude] = useState("");
@@ -422,6 +430,18 @@ export function DeviceLocationModal({
     return () => listener.remove();
   }, []);
 
+  useEffect(() => {
+    if (!screenPresented) return;
+    const timer = setInterval(() => {
+      const now = Date.now(); setGpsNow(now);
+      const fix = locationRef.current;
+      if (fix && now - fix.timestamp > LOCATION_POLICY.maxAgeMs) {
+        stopNavigation(); setError("The last GPS reading is stale. Refresh before navigating or sharing.");
+      }
+    }, 10_000);
+    return () => clearInterval(timer);
+  }, [screenPresented]);
+
   const stopTracking = () => {
     starting.current = false;
     trackingRequestId.current += 1;
@@ -463,6 +483,9 @@ export function DeviceLocationModal({
   };
 
   const updateLocation = (next: LocationObject) => {
+    const issue = positionIssue(next, Date.now());
+    if (issue) { stopNavigation(); reportLocationError(locationIssueMessage(issue)); return; }
+    setGpsNow(Date.now());
     const latitude = next.coords.latitude;
     const longitude = next.coords.longitude;
     locationRef.current = next;
@@ -514,6 +537,8 @@ export function DeviceLocationModal({
     navigationActiveRef.current = false;
     setNavigationActive(false);
     setNavigationProgress(null);
+    let timedOut = false;
+    const routeTimer = setTimeout(() => { timedOut = true; controller.abort(); }, 8000);
     try {
       const url = `https://router.project-osrm.org/route/v1/driving/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?alternatives=true&steps=true&overview=full&geometries=geojson`;
       const response = await fetch(url, {
@@ -532,11 +557,12 @@ export function DeviceLocationModal({
       setSelectedRouteId(selectedRoute?.id ?? null);
       return selectedRoute !== null;
     } catch (cause) {
-      if (requestId !== routingRequestId.current || controller.signal.aborted) return false;
-      const message = cause instanceof Error ? cause.message : "Unknown routing error.";
+      if (requestId !== routingRequestId.current || (controller.signal.aborted && !timedOut)) return false;
+      const message = timedOut ? "The route request timed out. Try again." : cause instanceof Error ? cause.message : "Unknown routing error.";
       setRouteError(`Unable to calculate a route. ${message}`);
       return false;
     } finally {
+      clearTimeout(routeTimer);
       if (requestId === routingRequestId.current) {
         routingController.current = null;
         setRouteLoading(false);
@@ -602,8 +628,10 @@ export function DeviceLocationModal({
         return null;
       }
 
-      const initial = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const initial = await withDeadline(Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }));
       if (!isCurrentRequest()) return null;
+      const initialIssue = positionIssue(initial, Date.now());
+      if (initialIssue) throw new Error(locationIssueMessage(initialIssue));
       updateLocation(initial);
       if (navigateAfterFix && plannedDestination) {
         const routeReady = await calculateRoutes(
@@ -683,6 +711,9 @@ export function DeviceLocationModal({
 
     void (async () => {
       try {
+        if (requireSavedSchoolLocation && (!schoolLocation || !isValidCoordinate(schoolLocation))) {
+          throw new Error("Saved school coordinates are unavailable. Search the school address or tap its destination on the map; verify any address match before navigating.");
+        }
         const schoolCoordinate = schoolLocation && isValidCoordinate(schoolLocation)
           ? schoolLocation
           : await geocodeAddress(`${schoolName}, ${schoolAddress}`);
@@ -709,7 +740,7 @@ export function DeviceLocationModal({
       cancelled = true;
       schoolLocationRequestId.current += 1;
     };
-  }, [screenPresented, schoolLocation, schoolName, schoolAddress]);
+  }, [screenPresented, schoolLocation, schoolName, schoolAddress, requireSavedSchoolLocation]);
 
   useEffect(() => {
     if (!screenPresented || schoolLoading || !schoolDestinationRef.current || !location || !destinationPoint) return;
@@ -876,6 +907,7 @@ export function DeviceLocationModal({
   return (
     <Modal visible={screenPresented} animationType="slide" onRequestClose={closeScreen} statusBarTranslucent>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1, backgroundColor: colors.background, paddingTop: insets.top }}>
+        {demoPreview ? <View style={{ padding: 10, backgroundColor: colors.primarySoft }}><T s={0.8} c={colors.primaryInk}>Phone GPS uses this device's real location. Demo pickup times and simulated positions are not used for this route. Trip sharing is disabled in Demo Mode.</T></View> : null}
         {navigationActive ? (
           <View style={{ minHeight: 86, paddingHorizontal: 16, paddingVertical: 12, flexDirection: "row", alignItems: "center", gap: 14, backgroundColor: colors.primary }}>
             <View style={{ width: 68, alignItems: "center", gap: 2 }}>
@@ -1093,46 +1125,171 @@ export function DeviceLocationModal({
             </Btn>
           </View>
         ) : (
-          <View style={{ paddingHorizontal: 14, paddingTop: 7, paddingBottom: Math.max(insets.bottom, 10), gap: 6, backgroundColor: colors.background }}>
-            {selectedRoute ? (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <T s={0.9} w={800}>
-                    {formatDuration(navigationProgress?.remainingMeters !== undefined && navigationProgress.remainingMeters <= 35
-                      ? 0
-                      : selectedRoute.durationSeconds)}
-                    {" · "}
-                    {formatDistance(navigationProgress?.remainingMeters ?? selectedRoute.distanceMeters)}
-                  </T>
-                  <T s={0.7} c="muted">{selectedRoute.roadSummary}</T>
+          <ScrollView
+            style={{ flexGrow: 0, maxHeight: "48%" }}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+            contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: Math.max(insets.bottom, 18), gap: 12 }}
+          >
+            <NavigationSearch devicePoint={devicePoint} onRequestGPS={() => void startTracking()} onChange={applyNavigationSelection} />
+            {previewOnly ? <T s={0.78} c="muted">Walking and cycling show a direct connection preview only. Road directions and ETA below are driving estimates; switch to Driving to start navigation.</T> : null}
+            {location ? <T s={0.76} c="muted">Accuracy: {location.coords.accuracy === null ? "Unknown" : `${Math.round(location.coords.accuracy)} m`} · Updated {new Date(location.timestamp).toLocaleTimeString()} · {tracking ? "Live" : "Stopped"}</T> : null}
+            <Btn kind="o" onPress={() => tracking ? stopNavigation() : void startTracking()} disabled={busy}>{tracking ? "Stop GPS" : busy ? "Getting location..." : "Use my location"}</Btn>
+            {activeSearch ? (
+              <View style={{ borderRadius: 14, overflow: "hidden", borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card }}>
+                {destinationSuggestions.length > 0 ? destinationSuggestions.map((place) => (
+                  <Press
+                    key={place.name}
+                    onPress={() => choosePlace(activeSearch, place)}
+                    label={`Use ${place.name}`}
+                    style={{ minHeight: 48, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 10, borderBottomWidth: 1, borderBottomColor: colors.line }}
+                  >
+                    <Icon name="today" size={18} color={colors.muted} />
+                    <T s={0.9}>{place.name}</T>
+                  </Press>
+                )) : (
+                  <View style={{ padding: 12 }}>
+                    <T s={0.82} c="muted">Type an address and tap search, or choose a destination on the map.</T>
+                  </View>
+                )}
+              </View>
+            ) : null}
+
+            {schoolLoading ? <T s={0.78} c="muted">Finding {schoolName} from the saved school details...</T> : null}
+            {error ? (
+              <View style={{ gap: 8 }}>
+                <T s={0.88} c={colors.danger} lh={1.35}>{error}</T>
+                {permissionBlocked && Platform.OS !== "web" ? <Btn kind="o" onPress={() => void Linking.openSettings()}>Open phone settings</Btn> : null}
+              </View>
+            ) : null}
+            {routeError ? <T s={0.84} c={colors.danger}>{routeError}</T> : null}
+
+            {routeReady ? (
+              <View style={{ gap: 10, paddingTop: 4 }}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <T s={1.05} w={800}>Route options</T>
+                  <View style={{ backgroundColor: colors.warning, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999 }}>
+                    <T s={0.66} w={700} c={colors.warningInk}>OSRM</T>
+                  </View>
                 </View>
-                <Btn kind="p" icon="drive" sm onPress={() => void startNavigation()} disabled={routeLoading || busy} loading={busy}>
-                  Start navigation
+                <T s={0.78} c="muted" lh={1.35}>
+                  Driving estimates use public OSRM and OpenStreetMap data. Live traffic and toll data are not provided.
+                </T>
+                <Btn
+                  kind="p"
+                  icon="drive"
+                  onPress={() => {
+                    if (currentPoint && destinationPoint) void calculateRoutes(currentPoint, destinationPoint);
+                  }}
+                  disabled={routeLoading || busy || navigationActive}
+                  loading={routeLoading}
+                >
+                  {routeLoading ? "Calculating route..." : "Refresh estimate"}
                 </Btn>
-              </View>
-            ) : null}
-            {schoolLoading ? <T s={0.72} c="muted">Finding {schoolName}...</T> : null}
-            {routeLoading ? <T s={0.72} c="muted">Calculating driving route...</T> : null}
-            {error || routeError ? (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <T s={0.72} c={colors.danger} lh={1.3} style={{ flex: 1 }}>{error || routeError}</T>
-                {permissionBlocked && Platform.OS !== "web" ? (
-                  <Btn kind="o" sm onPress={() => void Linking.openSettings()}>Settings</Btn>
+
+                {routeOptions.map((route) => {
+                  const selected = selectedRouteId === route.id;
+                  const expanded = expandedRoute === route.id;
+                  const remainingRatio = route.distanceMeters > 0 && navigationProgress && selected
+                    ? Math.min(1, navigationProgress.remainingMeters / route.distanceMeters)
+                    : 1;
+                  const remainingSeconds = navigationProgress && selected && navigationProgress.remainingMeters <= 35
+                    ? 0
+                    : route.durationSeconds * remainingRatio;
+                  return (
+                    <View
+                      key={route.id}
+                      style={{
+                        gap: 8, padding: 13, borderRadius: 16,
+                        backgroundColor: colors.card,
+                        borderWidth: selected ? 2 : 1,
+                        borderColor: selected ? colors.primary : colors.line,
+                      }}
+                    >
+                      <Press
+                        onPress={() => {
+                          if (navigationActive) return;
+                          selectedRouteIdRef.current = route.id;
+                          setSelectedRouteId(route.id);
+                          setPreviewRoute(route.id);
+                          setNavigationProgress(null);
+                          progressIndexRef.current = 0;
+                        }}
+                        disabled={navigationActive}
+                        label={`Select route option ${route.roadSummary}`}
+                        style={{ gap: 4 }}
+                      >
+                        <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+                          <T s={1.15} w={800}>{formatDuration(remainingSeconds)}</T>
+                          <T s={0.88} w={700} c="muted">{formatDistance(navigationProgress && selected ? navigationProgress.remainingMeters : route.distanceMeters)}</T>
+                        </View>
+                        <T s={0.82} w={700}>{route.roadSummary}</T>
+                        <T s={0.78} c="muted">
+                          {navigationProgress && selected && navigationProgress.remainingMeters <= 35
+                            ? "Arrived"
+                            : `ETA ${formatEta(navigationProgress && selected ? remainingSeconds : route.durationSeconds)}`}
+                          {" · Toll and live traffic info unavailable"}
+                        </T>
+                      </Press>
+                      {expanded ? (
+                        <T s={0.78} c="muted" lh={1.4}>
+                          Road names and turn prompts are derived from OSRM route steps. Live traffic, toll pricing, and voice guidance are not provided.
+                        </T>
+                      ) : null}
+                      <View style={{ flexDirection: "row", gap: 8 }}>
+                        <Btn kind="o" sm flex onPress={() => setExpandedRoute(expanded ? null : route.id)} label={`${expanded ? "Hide" : "Show"} route details`}>
+                          {expanded ? "Hide details" : "Details"}
+                        </Btn>
+                        <Btn
+                          kind={selected ? "s" : "o"}
+                          sm
+                          flex
+                          disabled={navigationActive}
+                          onPress={() => {
+                            selectedRouteIdRef.current = route.id;
+                            setSelectedRouteId(route.id);
+                            setPreviewRoute(route.id);
+                            setNavigationProgress(null);
+                            progressIndexRef.current = 0;
+                          }}
+                          label="Preview route on map"
+                        >
+                          {selected ? "Previewing" : "Preview"}
+                        </Btn>
+                      </View>
+                      {selected ? (
+                        <Btn kind="p" icon="drive" onPress={() => void startNavigation()} disabled={previewOnly || routeLoading || busy} loading={busy}>
+                          {busy ? "Starting GPS..." : "Start navigation"}
+                        </Btn>
+                      ) : null}
+                    </View>
+                  );
+                })}
+                {navigationProgress && !navigationActive ? (
+                  <View style={{ gap: 5, padding: 12, borderRadius: 14, backgroundColor: colors.primarySoft }}>
+                    <T s={0.9} w={700} c={colors.primaryInk}>
+                      {navigationProgress.remainingMeters <= 35 ? "Arrived at destination" : "Navigation stopped"}
+                    </T>
+                    {navigationProgress.deviationMeters > 100 ? (
+                      <T s={0.78} c={colors.warningInk}>You appear away from the planned route. Refresh the estimate from your current location.</T>
+                    ) : null}
+                  </View>
                 ) : null}
+                <T s={0.72} c="muted">Routing by OSRM · Map data © OpenStreetMap contributors</T>
               </View>
-            ) : null}
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-              <T s={0.72} c="muted" style={{ flex: 1 }}>
-                Accuracy: {location?.coords.accuracy == null ? "Unknown" : `${Math.round(location.coords.accuracy)} m`}
-                {" · "}
-                {location ? `Updated ${new Date(location.timestamp).toLocaleTimeString()} · ` : ""}
-                {tracking ? "Live" : "Stopped"}
-              </T>
-              <Btn kind="o" sm onPress={() => tracking ? stopNavigation() : void startTracking()} disabled={busy}>
-                {tracking ? "Stop GPS" : busy ? "Getting location..." : "Use my location"}
-              </Btn>
-            </View>
-          </View>
+            ) : (
+              <T s={0.82} c="muted">Set a starting point and destination to see a route estimate.</T>
+            )}
+            <TripSharing
+              visible={screenPresented}
+              tracking={tracking}
+              point={tracking && location ? {
+                latitude: location.coords.latitude,
+                longitude: location.coords.longitude,
+                accuracy: location.coords.accuracy,
+              } : null}
+            />
+          </ScrollView>
         )}
       </KeyboardAvoidingView>
     </Modal>
