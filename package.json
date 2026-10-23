@@ -44,11 +44,13 @@
   },
   "scripts": {
     "start": "expo start",
-    "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:logic",
+    "test:logic": "node tests/circleEngine.test.mjs && node tests/combinedCircle.test.mjs && node tests/demoSim.test.mjs && node tests/eta.test.mjs && node tests/invitationApi.test.mjs && node tests/invitationSafety.test.mjs && node tests/pickupFlow.test.mjs && node tests/realtimeChannel.test.mjs && node tests/teacherMessages.test.mjs"
   },
   "private": true
 }

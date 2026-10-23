@@ -253,6 +253,8 @@ export function usePickupFlow(screenActive = true) {
     leaveAt,
     collector,
     collectorRole: people.find((p) => p.name === collector.name)?.role ?? "",
+    /** Database-confirmed pickup journey; null for demo journeys. */
+    liveJourney: simActive ? null : journeyCtl.journey,
     realMode,
     simActive,
     busy,

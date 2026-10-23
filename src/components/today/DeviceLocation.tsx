@@ -778,6 +778,8 @@ export function DeviceLocationModal({
     }
     : null;
   const selectDestination = (coordinate: DeviceLocationCoordinate) => {
+    schoolLocationRequestId.current += 1;
+    schoolDestinationRef.current = false;
     clearRoutePlan();
     setDestinationLatitude(coordinate.latitude.toFixed(6));
     setDestinationLongitude(coordinate.longitude.toFixed(6));

@@ -1,17 +1,28 @@
-# SQL tests
+# Database tests
 
-Run on a throwaway in-memory Postgres (PGlite) with a stand-in for Supabase's `auth` schema:
+These tests use an in-memory PGlite database and a stand-in for Supabase's `auth` schema. They do not connect to the shared Supabase project. Run only the tests for the SQL change you are reviewing:
 
-    npm i --no-save @electric-sql/pglite
-    node supabase/tests/pickup_workflow.test.mjs   # backup requests
-    node supabase/tests/pickup_journeys.test.mjs   # pickup confirmation
-    node supabase/tests/school_location.test.mjs   # school coordinates check constraint
-    node supabase/tests/pickup_broadcast.test.mjs  # ask-everyone rounds, opt-in, scheduled check (proposal SQL)
-    node supabase/tests/push_notifications.test.mjs # push tokens, queue and triggers (proposal SQL in proposals/push-notifications/)
-    node supabase/tests/account_household.test.mjs  # profiles, family invites, role checks, availability, who gets asked (proposal SQL: account_household.sql and the broadcast patch)
+```bash
+npm install --no-save --package-lock=false @electric-sql/pglite
+node supabase/tests/account_household.test.mjs
+node supabase/tests/pickup_workflow.test.mjs
+node supabase/tests/pickup_journeys.test.mjs
+node supabase/tests/pickup_location_sharing.test.mjs
+node supabase/tests/school_location.test.mjs
+node supabase/tests/pickup_broadcast.test.mjs
+node supabase/tests/push_notifications.test.mjs
+```
 
-`two_phone_test_setup.sql` is not a test. It adds a test child and helper by hand for the two-phone test (`PICKUP_TWO_PHONE_TEST.md`). Run it only on a TEST project.
+Some suites use proposal SQL or root-level SQL files rather than the versioned migrations. Read each test's setup before interpreting a passing result. A PGlite pass does not verify Supabase grants, deployed policies, Realtime, `pg_cron`, email delivery, or behavior against the shared project.
 
-App-side logic tests (no database): `node tests/circleEngine.test.mjs`, `node tests/demoSim.test.mjs`, `node tests/pickupFlow.test.mjs`, `node tests/teacherMessages.test.mjs`, `node tests/eta.test.mjs`, `node tests/accountRules.test.mjs`, `node tests/availability.test.mjs` and `node tests/setupTasks.test.mjs` (need `esbuild`).
+`two_phone_test_setup.sql` is a manual fixture, not a test suite. It writes test records. Use it only against an explicitly designated test project and follow [PICKUP_TWO_PHONE_TEST.md](../../PICKUP_TWO_PHONE_TEST.md).
 
-They do not touch your real Supabase project. They cannot check Realtime or pg_cron.
+## App-side logic tests
+
+These use the `esbuild` dev dependency and do not need Supabase credentials or a database:
+
+```bash
+npm test
+```
+
+This runs the current tests in `tests/`. Run `npm run typecheck` separately. Neither command applies migrations or tests native UI/device behavior.

@@ -25,6 +25,12 @@ EXPO_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 EXPO_PUBLIC_SUPABASE_ANON_KEY=YOUR_PUBLIC_ANON_OR_PUBLISHABLE_KEY
 ```
 
+You can copy `.env.example` to `.env`, then replace both placeholders with your team's values. In PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
 Use the project URL itself; do not append `/rest/v1/`. The app reads these variables when Expo starts, so restart the dev server after changing `.env`.
 
 `.env` is ignored by Git. `EXPO_PUBLIC_` values are included in the client app and are not secrets. Use only the project's public anon/publishable key. Never use or commit a service-role key or other secret.
@@ -67,7 +73,10 @@ npm run web
 - Run the TypeScript check before completing implementation work:
 
   ```bash
-  npx tsc --noEmit
+  npm run typecheck
   ```
+
+- Run the local app-side logic checks with `npm test`. These do not connect to Supabase. SQL/PGlite tests have separate instructions in [`supabase/tests/README.md`](supabase/tests/README.md) and must use a throwaway local test database.
+- Review [`BACKEND_STATUS.md`](BACKEND_STATUS.md) for the repository's current integration and deployment evidence. Do not infer that a migration has been applied because its SQL file exists.
 
 Test affected screens and navigation in Expo Go when available, and report checks and remaining simulated behavior accurately.

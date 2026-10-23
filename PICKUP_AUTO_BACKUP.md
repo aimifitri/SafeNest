@@ -50,7 +50,7 @@ helper at a time. It never claims the circle was asked unless the database confi
       helper_assigned  (accepted, NOT collected)
               | demo: "collector starts travelling"      real: the collector taps start on their phone
               v
-         travelling  (demo marker moves; real mode shows no live location)
+         travelling  (demo marker moves; real collector location appears only after explicit sharing and the reviewed pickup-location migration)
               | demo: "collector arrives at school"      real: the collector taps arrived
               v
         at_school ("At school", parent can send the photo for the teacher)
@@ -156,10 +156,10 @@ Demo vs real:
 - Demo only: the travel progress and moving marker, the ETA text, and the "Demo: ... picked up" button.
   These live in `demoSim.ts` and never call Supabase.
 - Real mode: the collector's own journey buttons (existing `pickup_journeys` functions) drive travelling, at school and
-  picked up. The map shows no live helper location. The completion banner is in-app only. Push notifications are not built.
+  picked up. Pickup-scoped collector GPS is foreground-only, opt-in, and depends on `migrations/20261023_pickup_scoped_location_sharing.sql` after its workflow/journey prerequisites are reviewed and deployed. It is not available against the current unverified backend. The completion banner is in-app only. Push notifications are not built.
 - Supabase: no new SQL for this change. `pickup_broadcast.sql` from before is still only a proposal.
 
 ## Next steps (not built)
 
-- Two-phone test of real mode: `PICKUP_TWO_PHONE_TEST.md`, with `supabase/tests/two_phone_test_setup.sql` to add the test child and helper.
+- Two-phone test of real mode and pickup-scoped location: `PICKUP_TWO_PHONE_TEST.md`, with `supabase/tests/two_phone_test_setup.sql` to add the test child and helper. Location testing must wait until its migration is reviewed and applied to a TEST project.
 - Push notifications: `proposals/push-notifications/README.md`. SQL and Edge Function are proposals, nothing is applied or deployed.

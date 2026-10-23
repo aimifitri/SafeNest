@@ -1,6 +1,8 @@
 # Pickup workflow: what changed
 
-## SQL, in this order (Supabase SQL editor, all safe to re-run)
+> **Historical implementation notes:** Do not treat the SQL list below as current deployment instructions or assume every file is safe to rerun. Check the versioned migrations, test results, target project, and backend-owner approval first. Current repository/deployment evidence is summarized in [BACKEND_STATUS.md](BACKEND_STATUS.md).
+
+## Earlier SQL sequence (verify before use)
 1. `supabase/schema.sql` (already done)
 2. `supabase/location_sharing.sql` (optional; if present, closing a journey also stops that person's sharing)
 3. `supabase/pickup_workflow.sql`  backup request rules and helper answers
@@ -28,7 +30,7 @@ App side
 - Helper: the accepted request card now has Start journey / I've arrived at school / I've collected.
 - `AppContext` exposes `storedChildId`. `PickupStatus.simulated` and `BackupRequest.simulated` are `boolean`.
 
-## Still not done
+## Historical follow-up items (verify current status)
 - Needs Circle to store helpers in the database, the helper invite link, and a child row in `children`.
   Until then the screens stay on the labelled demo.
 - No push notification (a helper must open the app to see a request).
