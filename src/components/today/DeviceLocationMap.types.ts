@@ -24,4 +24,5 @@ export type DeviceLocationMapProps = {
   travelledCoordinates?: readonly RouteCoordinate[];
   navigationActive?: boolean;
   legalLabelBottomInset?: number;
+  onSelectDestination?: (coordinate: DeviceLocationCoordinate) => void;
 };
