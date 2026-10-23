@@ -1,9 +1,10 @@
 import MapView, { Circle, Marker, Polyline } from "react-native-maps";
 import type { Region } from "react-native-maps";
 import { useEffect, useRef, useState } from "react";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { View } from "react-native";
 
 import { useAppContext } from "../shared/AppContext";
-import type { TravelMode } from "./NavigationSearch";
 export type { DeviceLocationPoint } from "./DeviceLocationMap.types";
 import type { DeviceLocationMapProps } from "./DeviceLocationMap.types";
 
@@ -33,10 +34,10 @@ export function DeviceLocationMap({
   routeCoordinates,
   travelledCoordinates,
   navigationActive,
-  onSelectDestination,
-  previewMode,
-}: DeviceLocationMapProps & { previewMode?: TravelMode }) {
+  legalLabelBottomInset,
+}: DeviceLocationMapProps) {
   const { theme } = useAppContext();
+  const colors = theme.colors;
   const mapRef = useRef<MapView | null>(null);
   const [mapReady, setMapReady] = useState(false);
 
@@ -84,8 +85,8 @@ export function DeviceLocationMap({
       style={{ flex: 1 }}
       initialRegion={initialRegion({ point, destination })}
       onMapReady={() => setMapReady(true)}
-      onPress={(event) => onSelectDestination?.(event.nativeEvent.coordinate)}
       userInterfaceStyle={theme.isDark ? "dark" : "light"}
+      legalLabelInsets={{ top: 0, right: 0, bottom: legalLabelBottomInset ?? 0, left: 0 }}
       showsCompass
       showsScale
       accessibilityLabel="Map with current location and destination"
@@ -105,11 +106,35 @@ export function DeviceLocationMap({
             coordinate={{ latitude: point.latitude, longitude: point.longitude }}
             title={point.title}
             description={point.detail}
-          />
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
+          >
+            <View style={{
+              width: 34, height: 34, borderRadius: 17, alignItems: "center",
+              justifyContent: "center", backgroundColor: colors.primaryInk,
+              borderWidth: 2, borderColor: colors.card, elevation: 4,
+            }}>
+              <MaterialCommunityIcons name="account" size={20} color="#FFFFFF" />
+            </View>
+          </Marker>
         </>
       ) : null}
       {destination ? (
-        <Marker coordinate={destination} title={destinationTitle ?? "Destination"} description="Selected destination" pinColor="#B3261E" />
+        <Marker
+          coordinate={destination}
+          title={destinationTitle ?? "Destination"}
+          description="Selected destination"
+          anchor={{ x: 0.5, y: 0.5 }}
+          tracksViewChanges={false}
+        >
+          <View style={{
+            width: 34, height: 34, borderRadius: 17, alignItems: "center",
+            justifyContent: "center", backgroundColor: colors.danger,
+            borderWidth: 2, borderColor: colors.card, elevation: 4,
+          }}>
+            <MaterialCommunityIcons name="domain" size={19} color="#FFFFFF" />
+          </View>
+        </Marker>
       ) : null}
       {routeCoordinates && routeCoordinates.length > 1 ? (
         <Polyline
@@ -125,8 +150,8 @@ export function DeviceLocationMap({
         <Polyline
           coordinates={[{ latitude: point.latitude, longitude: point.longitude }, destination]}
           geodesic
-          lineDashPattern={previewMode === "walking" ? [4, 8] : [12, 8]}
-          strokeColor={previewMode === "walking" || previewMode === "biking" ? "#218975" : "#208AEF"}
+          lineDashPattern={[12, 8]}
+          strokeColor="#208AEF"
           strokeWidth={4}
         />
       ) : null}
