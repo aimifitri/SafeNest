@@ -1,5 +1,7 @@
 # Trusted Circle Integration Contract — Proposal for Frontend and Database Agreement
 
+> **Historical design proposal:** The Trusted Circle invitation implementation has since been added to `master`. This contract can still provide design context, but its statements about missing APIs and unimplemented code are from the earlier baseline. It is not evidence that the SQL has passed security review or been applied to a Supabase project; see [BACKEND_STATUS.md](BACKEND_STATUS.md).
+
 **Reviewed:** 18 October 2026 (Asia/Kuala_Lumpur). **Baseline:** Git `909cb42` plus the current uncommitted Trusted Circle implementation. **Status:** design proposal, not an approved migration or implemented API.
 
 ## 1. Scope and decision summary

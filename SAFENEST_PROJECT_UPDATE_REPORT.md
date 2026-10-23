@@ -1,5 +1,7 @@
 # SafeNest Project Update and Feature Implementation Report
 
+> **Historical assessment:** This report describes revision `909cb42` from 18 October 2026 and predates the account and Trusted Circle integration now on `master`. Its file count, backend-connectivity claims, dependency diagnostics, and recommendations are not current. Use [BACKEND_STATUS.md](BACKEND_STATUS.md) for current repository/backend boundaries; do not use this snapshot to decide whether a migration is deployed.
+
 **Assessment date:** 18 October 2026 (Asia/Kuala_Lumpur)
 **Assessed revision:** `909cb42` — `update new queries`
 **Working branch:** `master`

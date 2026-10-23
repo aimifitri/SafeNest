@@ -1,20 +1,22 @@
 import { PGlite } from "@electric-sql/pglite";
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const P = new URL("../", import.meta.url).pathname; // supabase/
+const P = fileURLToPath(new URL("../", import.meta.url)); // supabase/
 const db = new PGlite();
 await db.exec(`
   create role anon nologin; create role authenticated nologin; create schema auth;
   create table auth.users (id uuid primary key, email text, raw_user_meta_data jsonb default '{}'::jsonb);
   create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
   grant usage on schema auth, public to authenticated, anon; create publication supabase_realtime;`);
-await db.exec(fs.readFileSync(P + "schema.sql", "utf8"));
+await db.exec(fs.readFileSync(path.join(P, "schema.sql"), "utf8"));
 // location_sharing.sql minus the pg_cron part (PGlite has no pg_cron)
-const loc = fs.readFileSync(P + "location_sharing.sql", "utf8");
+const loc = fs.readFileSync(path.join(P, "location_sharing.sql"), "utf8");
 await db.exec(loc.slice(0, loc.indexOf("create extension if not exists pg_cron")));
-await db.exec(fs.readFileSync(P + "pickup_workflow.sql", "utf8"));
-await db.exec(fs.readFileSync(P + "pickup_journeys.sql", "utf8"));
-await db.exec(fs.readFileSync(P + "pickup_journeys.sql", "utf8")); // idempotent
+await db.exec(fs.readFileSync(path.join(P, "pickup_workflow.sql"), "utf8"));
+await db.exec(fs.readFileSync(path.join(P, "pickup_journeys.sql"), "utf8"));
+await db.exec(fs.readFileSync(path.join(P, "pickup_journeys.sql"), "utf8")); // idempotent
 
 const U = {
   A: "00000000-0000-0000-0000-00000000000a", // parent (admin)

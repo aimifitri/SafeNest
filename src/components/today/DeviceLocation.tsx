@@ -768,6 +768,19 @@ export function DeviceLocationModal({
       detail: undefined,
     }
     : null;
+<<<<<<< HEAD
+=======
+  const selectDestination = (coordinate: DeviceLocationCoordinate) => {
+    schoolLocationRequestId.current += 1;
+    schoolDestinationRef.current = false;
+    clearRoutePlan();
+    setDestinationLatitude(coordinate.latitude.toFixed(6));
+    setDestinationLongitude(coordinate.longitude.toFixed(6));
+    setDestinationText("Map pin");
+    setActiveSearch(null);
+    setPreviewRoute(null);
+  };
+>>>>>>> 81cdc614e3c160cec83562b86708393e28ab9c7a
   const routeReady = currentPoint !== null && destinationPoint !== null;
   const selectedRoute = routeOptions.find((route) => route.id === selectedRouteId) ?? null;
   const navigationRemainingRatio = selectedRoute && navigationProgress && selectedRoute.distanceMeters > 0

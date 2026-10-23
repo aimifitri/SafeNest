@@ -1,6 +1,6 @@
 # Account, onboarding and settings overhaul
 
-Status: ready for a branch and Pull Request. Nothing here was committed, pushed or deployed. The SQL files are proposals; nobody has applied them to a real project.
+> **Historical status note (2026-10-23):** The account, onboarding, and settings implementation described here has since been merged into `master`. The earlier “ready for a branch and Pull Request” status is obsolete. This note does not establish whether any SQL was applied to a Supabase project; see [BACKEND_STATUS.md](BACKEND_STATUS.md).
 
 ## 1. Audit: why a new account looked populated
 

@@ -8,9 +8,12 @@ Use a TEST Supabase project and dummy accounts. Do not use real children's detai
 ## 0. What you need
 
 - Two phones (or one phone and one emulator) with the app running. Call them **Parent phone** and **Helper phone**.
-- A test Supabase project with these applied by whoever owns the database, in this order:
-  `schema.sql`, `location_sharing.sql`, `pickup_workflow.sql`, `pickup_journeys.sql`.
-  `pickup_broadcast.sql` is optional and still a proposal: without it, Today asks one helper at a time and says so.
+- A test Supabase project where the backend owner has verified the deployed schema and the pickup workflow/journey prerequisites.
+  The root SQL files are historical integration scripts, not a canonical versioned deployment order. `location_sharing.sql` is
+  optional for generic trip sharing. `pickup_broadcast.sql` is also optional: without it, Today asks one helper at a time.
+- To test pickup-scoped collector GPS, the backend owner must first review and apply
+  `supabase/migrations/20261023_pickup_scoped_location_sharing.sql` to this TEST project after its workflow/journey prerequisites.
+  The migration is not deployed by this repository and the versioned migration order still needs reconciliation.
 - `.env` pointing at that project (`EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`).
 
 ## 1. Set up (about 5 minutes)
@@ -49,7 +52,7 @@ Tick each line. "Expect" is what should happen. Write down what you saw if it di
 
 ### D. The journey
 - [ ] Helper: tap **Start journey**.
-  Expect: Parent's Today says the helper is on the way. No live map position is shown (real mode never shows one).
+  Expect: Parent's Today says the helper is on the way. The parent can open **View collector location**; until the location migration is applied and the helper opts in, it says location has not been shared.
 - [ ] Helper: tap **I've arrived at school**.
   Expect: Parent's Today says the helper is at school. The parent can send the helper's photo to the teacher.
 - [ ] Parent: tap **Send photo to teacher** and send it through WhatsApp or the share sheet.
@@ -60,7 +63,7 @@ Tick each line. "Expect" is what should happen. Write down what you saw if it di
 - [ ] Helper: tap the same buttons again, or Parent: try to ask for backup again.
   Expect: refused with a plain message. Nothing is recorded twice.
 
-### E. Things that go wrong
+### F. Things that go wrong
 - [ ] Turn the Helper phone's internet off, tap **Yes, I can collect** on a new request.
   Expect: a message that nothing was sent. The card does not claim success.
 - [ ] Turn the internet back on and tap the button again.
@@ -76,7 +79,16 @@ Tick each line. "Expect" is what should happen. Write down what you saw if it di
 - [ ] Two phones answering the same request at once (both tap the button together).
   Expect: exactly one accepted, and the other sees a plain message that it was already taken.
 
-### F. Cleanup
+### E. Pickup location (only after the location migration is installed on this TEST project)
+- [ ] Helper: on the active journey, tap **Share location for this pickup** and grant foreground location permission.
+  Expect: the helper sees sharing on; the parent can view the collector phone's current point on Today.
+- [ ] Keep the helper app screen open and move the device. Expect: the point refreshes and shows a recent update time and accuracy.
+- [ ] Background or close the helper screen. Expect: uploads pause; the parent's last point becomes stale. No background tracking is used.
+- [ ] Helper taps **Stop sharing this pickup**. Expect: the parent can no longer see the point.
+- [ ] Repeat and complete or cancel the journey. Expect: sharing ends and the stored point is deleted.
+- [ ] Deny location permission. Expect: no point is sent and the helper receives a clear permission message.
+
+### G. Cleanup
 - [ ] Run the cleanup lines at the bottom of `two_phone_test_setup.sql`.
 
 ## 3. If something fails
@@ -87,5 +99,5 @@ Send me: which step, what you expected, what you saw, and the screenshot or erro
 
 - Push notifications (not built; see `proposals/push-notifications/README.md`).
 - The automatic request at the deadline (it needs the proposed scheduled job, `pickup_broadcast.sql`, approved by the backend team).
-- Background location and live helper position (not built).
+- Background location (not built). Pickup-scoped helper position is foreground-only and requires the reviewed location migration above.
 - Anything about the school: the teacher is not in the app.

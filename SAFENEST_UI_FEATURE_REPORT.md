@@ -1,5 +1,7 @@
 # SafeNest Frontend UI and Feature Reference
 
+> **Historical assessment:** This report predates the Trusted Circle integration now on `master`. Its feature and test-status statements describe an earlier revision and should not be treated as current. See [BACKEND_STATUS.md](BACKEND_STATUS.md) for repository/backend status.
+
 **Assessment:** 18 October 2026, Asia/Kuala_Lumpur · revision `909cb42`.
 
 ## 1. Executive summary and evidence boundaries
